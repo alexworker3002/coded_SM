@@ -1,0 +1,24 @@
+name: cng_mvlvm_server
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pytorch-cuda=11.8
+  - pytorch
+  - torchvision
+  - torchaudio
+  - numpy>=1.21
+  - scipy>=1.7
+  - pyyaml
+  - tqdm
+  - matplotlib
+  - seaborn
+  - tensorboard
+  - scikit-learn
+  - pip
+  - pip:
+    - gpytorch
+    - linear_operator

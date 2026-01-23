@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data (Don't track large datasets)
+data/raw/
+data/processed/
+
+# Logs & Models
+logs/
+checkpoints/
+*.pth
+*.log
+runs/
+
+# System
+.DS_Store
+.env
+.vscode/
+.idea/
+
+# Environment
+env/
+venv/

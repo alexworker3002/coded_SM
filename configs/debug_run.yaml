@@ -1,0 +1,29 @@
+# Debug Configuration for Verification
+experiment:
+  name: "debug_verification_run"
+  device: "auto"
+  seed: 42
+
+latent_space:
+  info_dim: 10
+  redundancy_factor: 2
+  ecc_type: "repetition"
+
+kernels:
+  type: "ng_sm"
+  num_mixtures: 2       # Reduce complexity for debug
+  rff_samples: 50       # Reduce complexity for debug
+
+views:
+  fac: { input_dim: 216, likelihood: "gaussian" }
+  fou: { input_dim: 76,  likelihood: "gaussian" }
+  kar: { input_dim: 64,  likelihood: "gaussian" }
+  pix: { input_dim: 240, likelihood: "gaussian" }
+  zer: { input_dim: 47,  likelihood: "gaussian" }
+  mor: { input_dim: 6,   likelihood: "gaussian" }
+
+training:
+  batch_size: 64
+  lr: 0.01
+  epochs: 2             # Run only 2 epochs to verify pipeline
+  log_interval: 1       # Log every epoch

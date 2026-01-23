@@ -1,0 +1,29 @@
+# High Redundancy Experiment (L=5)
+experiment:
+  name: "cng_mvlvm_mfeat_redundancy_5"
+  device: "auto"
+  seed: 42
+
+latent_space:
+  info_dim: 10
+  redundancy_factor: 5  # Increased from 2 to 5
+  ecc_type: "repetition"
+
+kernels:
+  type: "ng_sm"
+  num_mixtures: 4
+  rff_samples: 500
+
+views:
+  fac: { input_dim: 216, likelihood: "gaussian" }
+  fou: { input_dim: 76,  likelihood: "gaussian" }
+  kar: { input_dim: 64,  likelihood: "gaussian" }
+  pix: { input_dim: 240, likelihood: "gaussian" }
+  zer: { input_dim: 47,  likelihood: "gaussian" }
+  mor: { input_dim: 6,   likelihood: "gaussian" }
+
+training:
+  batch_size: 256
+  lr: 0.01
+  epochs: 500 # Keep consistent
+  log_interval: 10

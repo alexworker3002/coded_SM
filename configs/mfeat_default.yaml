@@ -1,0 +1,33 @@
+# 基础实验配置
+experiment:
+  name: "cng_mvlvm_mfeat_trial_01"
+  device: "auto"  # 或 "cpu"
+  seed: 42
+
+# 潜空间与编码配置 (Coded Architecture)
+latent_space:
+  info_dim: 10          # 原始潜变量 Z 的维度
+  redundancy_factor: 2  # 冗余因子 L，则冗余空间 X 维度为 10 * 2 = 20
+  ecc_type: "repetition" # 纠错码类型：重复码
+
+# 核函数配置 (Next-Gen Spectral Mixture)
+kernels:
+  type: "ng_sm"
+  num_mixtures: 4       # Q: 混合成分的数量
+  rff_samples: 500      # 随机傅里叶特征采样数，决定了计算开销
+
+# 视图定义 (根据 mfeat 真实维度)
+views:
+  fac: { input_dim: 216, likelihood: "gaussian" }
+  fou: { input_dim: 76,  likelihood: "gaussian" }
+  kar: { input_dim: 64,  likelihood: "gaussian" }
+  pix: { input_dim: 240, likelihood: "gaussian" }
+  zer: { input_dim: 47,  likelihood: "gaussian" }
+  mor: { input_dim: 6,   likelihood: "gaussian" }
+
+# 训练超参数
+training:
+  batch_size: 256
+  lr: 0.01
+  epochs: 500
+  log_interval: 10
