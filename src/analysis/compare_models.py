@@ -50,36 +50,44 @@ class ModelComparator:
         print(f"[{exp_name}] Using run: {actual_dir}")
             
         # Infer redundancy from name
-        if "L=5" in exp_name:
-            redundancy = 5
-            use_ecc = True
-        elif "L=2" in exp_name and "Random" in exp_name: # Handle L=2 Random
-            redundancy = 2
-            use_ecc = True
-        elif "Uncoded" in exp_name:
+        # Infer redundancy and ECC Mode
+        if "Uncoded" in exp_name or "L=1" in exp_name:
             redundancy = 1
             use_ecc = False
+            ecc_mode = 'repetition' # Dummy
         else:
-            # Default Coded L=2 (if not specified otherwise)
-            redundancy = 2
+            # VAE Batch is L=5
+            redundancy = 5
             use_ecc = True
             
-        # Infer ECC Mode (New for Path A)
-        if "Random" in exp_name or "random" in ckpt_dir_prefix:
-            ecc_mode = 'random_gaussian'
+            if "Random" in exp_name or "random" in exp_name:
+                ecc_mode = 'random_gaussian'
+            else:
+                ecc_mode = 'repetition'
+
+        # Infer inference_mode & encoder_type (New logic for VAE batch)
+        if "VAE" in exp_name or "vae" in exp_name:
+            inference_mode = 'amortized'
+            if "CNN" in exp_name or "cnn" in exp_name:
+                encoder_type = 'cnn'
+            else:
+                encoder_type = 'mlp'
         else:
-            ecc_mode = 'repetition'
+            inference_mode = 'direct'
+            encoder_type = 'mlp'
             
         # Build Model
         model = CNG_MV_GPLVM(
             num_data=self.num_data,
-            input_dim=10, 
+            input_dim=2, # Fixed to 2 for this batch
             view_dims=self.view_dims,
             redundancy_factor=redundancy,
             use_ecc=use_ecc,
             num_mixtures=4,
             rff_samples=500,
-            ecc_mode=ecc_mode 
+            ecc_mode=ecc_mode,
+            inference_mode=inference_mode,
+            encoder_type=encoder_type
         ).to(self.device)
         
         # Load Weights
@@ -219,11 +227,11 @@ class ModelComparator:
             # Plot each model
             # Colors for 4 models
             colors = {
-                'Uncoded': 'red', 
-                'Coded (L=2)': 'blue',
-                'Coded (L=5)': 'green',
-                'Coded (L=5, Random)': 'purple',
-                'Coded (L=2, Random)': 'orange'
+                'SMLVM (Uncoded, L=1)': 'black',
+                'VAE-CNN (L=5, Random)': 'red',
+                'VAE-CNN (L=5, Rep)': 'blue',
+                'VAE-MLP (L=5, Random)': 'magenta',
+                'VAE-MLP (L=5, Rep)': 'cyan'
             }
             
             for model_name, model_data in stats.items():
@@ -261,12 +269,14 @@ class ModelComparator:
 if __name__ == "__main__":
     # Define experiment mapping
     # Define experiment mapping
+    # Define experiment mapping
+    # VAE Batch Experiments
     experiments = {
-        "Uncoded": "cng_mvlvm_mfeat_uncoded",
-        "Coded (L=2)": "cng_mvlvm_mfeat_trial_01",
-        "Coded (L=5)": "cng_mvlvm_mfeat_redundancy_5",
-        "Coded (L=5, Random)": "cng_local_L5_random_gaussian",
-        "Coded (L=2, Random)": "cng_local_L2_random_gaussian"
+        "SMLVM (Uncoded, L=1)": "smlvm_uncoded_L1",
+        "VAE-CNN (L=5, Random)": "vae_cnn_L5_random",
+        "VAE-CNN (L=5, Rep)": "vae_cnn_L5_rep",
+        "VAE-MLP (L=5, Random)": "vae_mlp_L5_random",
+        "VAE-MLP (L=5, Rep)": "vae_mlp_L5_rep"
     }
     
     comparator = ModelComparator(
