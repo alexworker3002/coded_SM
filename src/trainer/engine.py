@@ -53,14 +53,27 @@ class Trainer:
         print("[Trainer] Loading Dataset...")
         # 注意: load_mfeat_data 内部可能会 check 文件是否存在，如果不在会报错
         # 我们假设已下载
+        print("[Trainer] Loading Dataset...")
+        dataset_name = self.cfg['experiment'].get('dataset', 'mfeat')
+        
         try:
-            self.dataset = load_mfeat_data(mode="real")
-        except FileNotFoundError:
-            print("[Trainer] Real data not found. Attempting to download...")
-            from src.utils.data_download import download_mfeat
-            download_mfeat()
-            print("[Trainer] Download complete. Reloading dataset...")
-            self.dataset = load_mfeat_data(mode="real")
+            if dataset_name == 'caltech101-7':
+                print("[Trainer] Using Caltech101-7 Dataset")
+                from src.utils.data_caltech import load_caltech_data
+                self.dataset = load_caltech_data()
+            else:
+                # Default to mfeat
+                self.dataset = load_mfeat_data(mode="real")
+        except Exception as e:
+            print(f"[Trainer] Error loading dataset {dataset_name}: {e}")
+            if dataset_name == 'mfeat':
+                print("[Trainer] Attempting to download mfeat...")
+                from src.utils.data_download import download_mfeat
+                download_mfeat()
+                print("[Trainer] Download complete. Reloading...")
+                self.dataset = load_mfeat_data(mode="real")
+            else:
+                raise e
         
         # DataLoader
         self.batch_size = self.cfg['training']['batch_size']

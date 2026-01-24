@@ -6,6 +6,8 @@ __pycache__/
 # Data (Don't track large datasets)
 data/raw/
 data/processed/
+results/
+
 
 # Logs & Models
 logs/

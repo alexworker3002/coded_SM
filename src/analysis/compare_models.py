@@ -23,15 +23,23 @@ from src.utils.data_utils import load_mfeat_data
 sns.set(style="whitegrid")
 
 class ModelComparator:
-    def __init__(self, exp_dirs, device='cpu'):
+    def __init__(self, exp_dirs, device='cpu', dataset_name='mfeat'):
         """
         exp_dirs: Dict {Display Name: Checkpoint Dir Prefix}
         """
         self.device = device
         self.dirs = exp_dirs
+        self.dataset_name = dataset_name
         
-        # Load Data once
-        self.dataset = load_mfeat_data(mode="real")
+        # Load Data
+        if dataset_name == 'mfeat':
+            self.dataset = load_mfeat_data(mode="real")
+        elif dataset_name == 'caltech101-7':
+            from src.utils.data_caltech import load_caltech_data
+            self.dataset = load_caltech_data()
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+            
         self.labels = self.dataset.labels.numpy()
         self.view_dims = {k: v.shape[1] for k, v in self.dataset.views.items()}
         self.num_data = len(self.dataset)
@@ -310,31 +318,34 @@ class ModelComparator:
 
 if __name__ == "__main__":
     # Define 3 Groups of Experiments
-    groups = {
-        "Z2": {
-            "SMLVM (Z=2)": "smlvm_Z2_L1",
-            "VAE-Rep (Z=2)": "vae_mlp_Z2_L2_rep",
-            "VAE-Random (Z=2)": "vae_mlp_Z2_L2_random",
-            "VAE-NoECC (Z=2)": "vae_mlp_Z2_no_ecc"
+    if __name__ == "__main__":
+    # Define Caltech Groups (Z=5, Z=10)
+    caltech_groups = {
+        "Caltech_Z5": {
+            "SMLVM (L=1)": "caltech_smlvm_Z5_L1",
+            "VAE-MLP-Uncoded": "caltech_vae_mlp_Z5_L1_uncoded",
+            "VAE-CNN-Uncoded": "caltech_vae_cnn_Z5_L1_uncoded",
+            "VAE-MLP-Rep (L=2)": "caltech_vae_mlp_Z5_L2_rep",
+            "VAE-CNN-Rep (L=2)": "caltech_vae_cnn_Z5_L2_rep",
+            "VAE-MLP-Rand (L=5)": "caltech_vae_mlp_Z5_L5_random",
+            "VAE-CNN-Rand (L=5)": "caltech_vae_cnn_Z5_L5_random",
         },
-        "Z5": {
-            "SMLVM (Z=5)": "smlvm_Z5_L1",
-            "VAE-Rep (Z=5)": "vae_mlp_Z5_L2_rep",
-            "VAE-Random (Z=5)": "vae_mlp_Z5_L2_random",
-            "VAE-NoECC (Z=5)": "vae_mlp_Z5_no_ecc"
-        },
-        "Z10": {
-            "SMLVM (Z=10)": "smlvm_Z10_L1",
-            "VAE-Rep (Z=10)": "vae_mlp_Z10_L2_rep",
-            "VAE-Random (Z=10)": "vae_mlp_Z10_L2_random",
-            "VAE-NoECC (Z=10)": "vae_mlp_Z10_no_ecc"
+        "Caltech_Z10": {
+            "SMLVM (L=1)": "caltech_smlvm_Z10_L1",
+            "VAE-MLP-Uncoded": "caltech_vae_mlp_Z10_L1_uncoded",
+            "VAE-CNN-Uncoded": "caltech_vae_cnn_Z10_L1_uncoded",
+            "VAE-MLP-Rep (L=2)": "caltech_vae_mlp_Z10_L2_rep",
+            "VAE-CNN-Rep (L=2)": "caltech_vae_cnn_Z10_L2_rep",
+            "VAE-MLP-Rand (L=5)": "caltech_vae_mlp_Z10_L5_random",
+            "VAE-CNN-Rand (L=5)": "caltech_vae_cnn_Z10_L5_random",
         }
     }
     
-    # Run analysis for each group separately
-    for group_name, experiments_map in groups.items():
+    # Run analysis for each group
+    for group_name, experiments_map in caltech_groups.items():
         comparator = ModelComparator(
-            exp_dirs=experiments_map, # Pass only this group's subset
-            device='cpu'
+            exp_dirs=experiments_map, 
+            device='cpu',
+            dataset_name='caltech101-7' # New arg
         )
         comparator.run_group(group_name, experiments_map)
