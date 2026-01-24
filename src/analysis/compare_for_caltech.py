@@ -255,26 +255,26 @@ class AdvancedComparator:
         self.plot_results(df, suffix)
 
     def plot_results(self, df, suffix=""):
-        # Filter out NaN shift (SMLVM) for the line plot
-        df_line = df.dropna(subset=["Latent Shift"])
+        # Plotting
+        # Do not drop NaNs for the line plot, so that X-axis stays aligned
         
         fig, ax1 = plt.subplots(figsize=(14, 7))
         
         # Single Bar Plot: NMI
-        # Using a distinct palette
         sns.barplot(data=df, x="Model", y="NMI", ax=ax1, palette="viridis", alpha=0.7)
         ax1.set_ylabel("Clustering NMI (Higher is Better)", fontsize=14)
         ax1.set_ylim(0, 1.0)
         ax1.tick_params(axis='x', rotation=45)
         
         # Line Plot: Latent Shift (Secondary Axis)
-        if not df_line.empty:
-            ax2 = ax1.twinx()
-            sns.lineplot(data=df_line, x="Model", y="Latent Shift", ax=ax2, 
-                         marker='o', color='red', linewidth=3, sort=False, label='Latent Shift')
-            ax2.set_ylabel("Latent Shift (Lower is Better)", color='red', fontsize=14)
-            ax2.tick_params(axis='y', labelcolor='red')
-            ax2.grid(False) # avoid clutter
+        # SMLVM has NaN shift, lineplot will break/skip it, which is correct.
+        ax2 = ax1.twinx()
+        sns.lineplot(data=df, x="Model", y="Latent Shift", ax=ax2, 
+                     marker='o', color='red', linewidth=3, sort=False, label='Latent Shift')
+        
+        ax2.set_ylabel("Latent Shift (Lower is Better)", color='red', fontsize=14)
+        ax2.tick_params(axis='y', labelcolor='red')
+        ax2.grid(False)
             
         plt.title(f"Algorithm Performance Gap: Semantic Quality vs. Robustness ({suffix})", fontsize=16)
         plt.tight_layout()
