@@ -294,10 +294,25 @@ if __name__ == "__main__":
         "VAE-MLP (Uncoded)": "caltech_vae_mlp_Z10_L1_uncoded",
         "VAE-MLP (Rep L=2)": "caltech_vae_mlp_Z10_L2_rep",
         "VAE-MLP (Rand L=5)": "caltech_vae_mlp_Z10_L5_random",
-        # Add CNN versions if you want
+        "VAE-CNN (Uncoded)": "caltech_vae_cnn_Z10_L1_uncoded",
         "VAE-CNN (Rep L=2)": "caltech_vae_cnn_Z10_L2_rep",
         "VAE-CNN (Rand L=5)": "caltech_vae_cnn_Z10_L5_random",
     }
     
-    comparator = AdvancedComparator(z10_experiments, device='cpu')
-    comparator.benchmark(suffix="Z10")
+    z5_experiments = {
+        "SMLVM (Uncoded)": "caltech_smlvm_Z5_L1",
+        "VAE-MLP (Uncoded)": "caltech_vae_mlp_Z5_L1_uncoded",
+        "VAE-MLP (Rep L=2)": "caltech_vae_mlp_Z5_L2_rep",
+        "VAE-MLP (Rand L=5)": "caltech_vae_mlp_Z5_L5_random",
+        "VAE-CNN (Uncoded)": "caltech_vae_cnn_Z5_L1_uncoded",
+        "VAE-CNN (Rep L=2)": "caltech_vae_cnn_Z5_L2_rep",
+        "VAE-CNN (Rand L=5)": "caltech_vae_cnn_Z5_L5_random",
+    }
+    
+    print("\n>>> Running Benchmark for Z=10 Group")
+    comparator_z10 = AdvancedComparator(z10_experiments, device='cpu')
+    comparator_z10.benchmark(suffix="Z10")
+
+    print("\n>>> Running Benchmark for Z=5 Group")
+    comparator_z5 = AdvancedComparator(z5_experiments, device='cpu')
+    comparator_z5.benchmark(suffix="Z5")
