@@ -318,7 +318,7 @@ class ModelComparator:
 
 if __name__ == "__main__":
     # Define 3 Groups of Experiments
-    if __name__ == "__main__":
+if __name__ == "__main__":
     # Define Caltech Groups (Z=5, Z=10)
     caltech_groups = {
         "Caltech_Z5": {
