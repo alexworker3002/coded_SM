@@ -21,15 +21,26 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
     
     # Mirror URL for Caltech101-7 .mat file
     # Source: https://github.com/yeqinglee/mvdata
+    # Use raw.githubusercontent.com for stable download
     url = "https://github.com/yeqinglee/mvdata/raw/master/Caltech101-7.mat"
     
     if not os.path.exists(file_path):
         print(f"Downloading Caltech101-7 dataset to {file_path}...")
+        print(f"Source: {url}")
         try:
+            # Add headers to mimic browser to avoid 403/404 on some servers
+            opener = urllib.request.build_opener()
+            opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+            urllib.request.install_opener(opener)
+            
             urllib.request.urlretrieve(url, file_path)
             print("Download complete.")
         except Exception as e:
-            raise RuntimeError(f"Download failed. Please manually download Caltech101-7.mat to {data_dir}. Error: {e}")
+            print(f"❌ Automatic download failed: {e}")
+            print(f"👉 Please manually download 'Caltech101-7.mat' from:")
+            print(f"   {url}")
+            print(f"   And place it in: {os.path.abspath(data_dir)}")
+            raise RuntimeError(f"Download failed. See instruction above.")
 
     # Load .mat file
     try:
