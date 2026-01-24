@@ -19,28 +19,39 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
     
     file_path = os.path.join(data_dir, "Caltech101-7.mat")
     
-    # Mirror URL for Caltech101-7 .mat file
-    # Source: https://github.com/yeqinglee/mvdata
-    # Use raw.githubusercontent.com for stable download
-    url = "https://github.com/yeqinglee/mvdata/raw/master/Caltech101-7.mat"
+    # Mirror URLs for Caltech101-7 .mat file
+    # Try multiple sources as some might be 404 or region-blocked
+    urls = [
+        "https://github.com/yeqinglee/mvdata/raw/master/Caltech101-7.mat",
+        "https://github.com/ZhiqiangXu/MvC_Data/raw/master/Caltech101-7.mat",
+        "https://github.com/Jeaninezpp/Multi-view-clustering/raw/master/Caltech101-7.mat",
+        "https://raw.githubusercontent.com/yeqinglee/mvdata/master/Caltech101-7.mat"
+    ]
     
     if not os.path.exists(file_path):
         print(f"Downloading Caltech101-7 dataset to {file_path}...")
-        print(f"Source: {url}")
-        try:
-            # Add headers to mimic browser to avoid 403/404 on some servers
-            opener = urllib.request.build_opener()
-            opener.addheaders = [('User-agent', 'Mozilla/5.0')]
-            urllib.request.install_opener(opener)
-            
-            urllib.request.urlretrieve(url, file_path)
-            print("Download complete.")
-        except Exception as e:
-            print(f"❌ Automatic download failed: {e}")
-            print(f"👉 Please manually download 'Caltech101-7.mat' from:")
-            print(f"   {url}")
-            print(f"   And place it in: {os.path.abspath(data_dir)}")
-            raise RuntimeError(f"Download failed. See instruction above.")
+        
+        success = False
+        for url in urls:
+            print(f"Trying source: {url} ...")
+            try:
+                # Add headers to mimic browser
+                opener = urllib.request.build_opener()
+                opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+                urllib.request.install_opener(opener)
+                
+                urllib.request.urlretrieve(url, file_path)
+                print("Download complete.")
+                success = True
+                break
+            except Exception as e:
+                print(f"❌ Failed: {e}")
+        
+        if not success:
+            print(f"❌ All automatic downloads failed.")
+            print(f"👉 Please manually download 'Caltech101-7.mat' (search Google/GitHub) and place it in:")
+            print(f"   {os.path.abspath(data_dir)}")
+            raise RuntimeError("Dataset download failed.")
 
     # Load .mat file
     try:
