@@ -73,6 +73,32 @@ def generate_batch():
         'name': 'smlvm_uncoded_L1',
         'L': 1, 'ecc': 'none', 'inf': 'direct', 'enc': 'mlp' # Enc ignored for direct
     })
+
+    # --- L=10 Experiments ---
+    
+    # 6. VAE-CNN (L=10, Random, Z=2)
+    configs.append({
+        'name': 'vae_cnn_L10_random',
+        'L': 10, 'ecc': 'random_gaussian', 'inf': 'amortized', 'enc': 'cnn'
+    })
+    
+    # 7. VAE-CNN (L=10, Repetition, Z=2)
+    configs.append({
+        'name': 'vae_cnn_L10_rep',
+        'L': 10, 'ecc': 'repetition', 'inf': 'amortized', 'enc': 'cnn'
+    })
+    
+    # 8. VAE-MLP (L=10, Random, Z=2)
+    configs.append({
+        'name': 'vae_mlp_L10_random',
+        'L': 10, 'ecc': 'random_gaussian', 'inf': 'amortized', 'enc': 'mlp'
+    })
+    
+    # 9. VAE-MLP (L=10, Repetition, Z=2)
+    configs.append({
+        'name': 'vae_mlp_L10_rep',
+        'L': 10, 'ecc': 'repetition', 'inf': 'amortized', 'enc': 'mlp'
+    })
     
     print(f"Generating {len(configs)} configurations in {output_dir}...")
     

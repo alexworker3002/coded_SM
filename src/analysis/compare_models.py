@@ -56,8 +56,12 @@ class ModelComparator:
             use_ecc = False
             ecc_mode = 'repetition' # Dummy
         else:
-            # VAE Batch is L=5
-            redundancy = 5
+            # VAE Batch is L=5 or L=10
+            if "L=10" in exp_name:
+                redundancy = 10
+            else:
+                redundancy = 5
+            
             use_ecc = True
             
             if "Random" in exp_name or "random" in exp_name:
@@ -231,7 +235,11 @@ class ModelComparator:
                 'VAE-CNN (L=5, Random)': 'red',
                 'VAE-CNN (L=5, Rep)': 'blue',
                 'VAE-MLP (L=5, Random)': 'magenta',
-                'VAE-MLP (L=5, Rep)': 'cyan'
+                'VAE-MLP (L=5, Rep)': 'cyan',
+                'VAE-CNN (L=10, Random)': 'darkred',
+                'VAE-CNN (L=10, Rep)': 'navy',
+                'VAE-MLP (L=10, Random)': 'darkmagenta',
+                'VAE-MLP (L=10, Rep)': 'teal'
             }
             
             for model_name, model_data in stats.items():
@@ -276,7 +284,11 @@ if __name__ == "__main__":
         "VAE-CNN (L=5, Random)": "vae_cnn_L5_random",
         "VAE-CNN (L=5, Rep)": "vae_cnn_L5_rep",
         "VAE-MLP (L=5, Random)": "vae_mlp_L5_random",
-        "VAE-MLP (L=5, Rep)": "vae_mlp_L5_rep"
+        "VAE-MLP (L=5, Rep)": "vae_mlp_L5_rep",
+        "VAE-CNN (L=10, Random)": "vae_cnn_L10_random",
+        "VAE-CNN (L=10, Rep)": "vae_cnn_L10_rep",
+        "VAE-MLP (L=10, Random)": "vae_mlp_L10_random",
+        "VAE-MLP (L=10, Rep)": "vae_mlp_L10_rep"
     }
     
     comparator = ModelComparator(
