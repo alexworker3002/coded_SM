@@ -28,6 +28,13 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
         "https://raw.githubusercontent.com/yeqinglee/mvdata/master/Caltech101-7.mat"
     ]
     
+    # Check if file exists and is valid
+    if os.path.exists(file_path):
+        # If file is empty or too small (e.g. < 10KB), it's likely a failed download or 404 html page
+        if os.path.getsize(file_path) < 10 * 1024:
+            print(f"⚠️ Found corrupt/empty file at {file_path}. Deleting and re-downloading...")
+            os.remove(file_path)
+            
     if not os.path.exists(file_path):
         print(f"Downloading Caltech101-7 dataset to {file_path}...")
         
@@ -41,11 +48,18 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
                 urllib.request.install_opener(opener)
                 
                 urllib.request.urlretrieve(url, file_path)
+                
+                # Verify download immediately
+                if os.path.getsize(file_path) < 10 * 1024:
+                    raise RuntimeError("Downloaded file is too small (likely 404 page).")
+                    
                 print("Download complete.")
                 success = True
                 break
             except Exception as e:
                 print(f"❌ Failed: {e}")
+                if os.path.exists(file_path):
+                    os.remove(file_path) # Cleanup partial/corrupt file
         
         if not success:
             print(f"❌ All automatic downloads failed.")
