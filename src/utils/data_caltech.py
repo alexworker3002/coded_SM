@@ -22,6 +22,7 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
     # Mirror URLs for Caltech101-7 .mat file
     # Try multiple sources as some might be 404 or region-blocked
     urls = [
+        "https://github.com/SubhadeepNag/Multi-View-Clustering/raw/master/datasets/Caltech101-7.mat", 
         "https://github.com/yeqinglee/mvdata/raw/master/Caltech101-7.mat",
         "https://github.com/ZhiqiangXu/MvC_Data/raw/master/Caltech101-7.mat",
         "https://github.com/Jeaninezpp/Multi-view-clustering/raw/master/Caltech101-7.mat",
