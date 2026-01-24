@@ -50,27 +50,38 @@ class ModelComparator:
         actual_dir = sorted(candidates)[-1] # Take latest
         print(f"[{exp_name}] Using run: {actual_dir}")
             
-        # Infer redundancy from name
         # Infer redundancy and ECC Mode
         if "Uncoded" in exp_name or "L=1" in exp_name:
             redundancy = 1
             use_ecc = False
             ecc_mode = 'repetition' # Dummy
         else:
-            # VAE Batch is L=5 or L=10
+            use_ecc = True
             if "L=10" in exp_name:
                 redundancy = 10
-            else:
+            elif "L=5" in exp_name:
                 redundancy = 5
-            
-            use_ecc = True
+            elif "L=2" in exp_name:
+                redundancy = 2
+            else:
+                redundancy = 5 # Default
             
             if "Random" in exp_name or "random" in exp_name:
                 ecc_mode = 'random_gaussian'
             else:
                 ecc_mode = 'repetition'
 
-        # Infer inference_mode & encoder_type (New logic for VAE batch)
+        # Infer info_dim (Z) from name
+        if "Z=2" in exp_name or "Z2" in exp_name:
+            input_dim = 2
+        elif "Z=5" in exp_name or "Z5" in exp_name:
+            input_dim = 5
+        elif "Z=10" in exp_name or "Z10" in exp_name:
+            input_dim = 10
+        else:
+            input_dim = 2 # Default
+
+        # Infer inference_mode & encoder_type
         if "VAE" in exp_name or "vae" in exp_name:
             inference_mode = 'amortized'
             if "CNN" in exp_name or "cnn" in exp_name:
@@ -84,7 +95,7 @@ class ModelComparator:
         # Build Model
         model = CNG_MV_GPLVM(
             num_data=self.num_data,
-            input_dim=2, # Fixed to 2 for this batch
+            input_dim=input_dim,
             view_dims=self.view_dims,
             redundancy_factor=redundancy,
             use_ecc=use_ecc,
@@ -122,8 +133,6 @@ class ModelComparator:
             if model.inference_mode == 'direct':
                 z_mu = model.q_mu.detach().cpu().numpy()
             else:
-                 # If Amortized, we need to pass data through encoder
-                 # Use DataLoader to get all latents
                  loader = DataLoader(self.dataset, batch_size=256, shuffle=False)
                  z_list = []
                  with torch.no_grad():
@@ -179,6 +188,36 @@ class ModelComparator:
         plt.savefig(f"comparison_latent_{method}{suffix}.png")
         print(f"Saved plot: comparison_latent_{method}{suffix}.png")
 
+    def compute_class_wise_recon(self):
+        # Result: {ModelName: {ClassID: {ViewName: Error}}}
+        final_stats = {}
+        loader = DataLoader(self.dataset, batch_size=256, shuffle=False)
+        
+        for name in self.dirs.keys():
+            print(f"Computing per-view errors for {name}...")
+            model = self.load_model(name)
+            
+            # Accumulators
+            class_errors = {c: {v: [] for v in self.view_dims} for c in range(10)}
+            
+            with torch.no_grad():
+                for views_batch, labels, indices in loader:
+                    views_batch = {k: v.to(self.device).float() for k, v in views_batch.items()}
+                    labels = labels.numpy()
+                    
+                    y_recons, _, _ = model.forward(indices.to(self.device), views_batch)
+                    
+                    for v_name in self.view_dims:
+                        mse_per_sample = (views_batch[v_name] - y_recons[v_name]).pow(2).mean(dim=1).cpu().numpy()
+                        for i, label in enumerate(labels):
+                            class_errors[label][v_name].append(mse_per_sample[i])
+                            
+            mean_errors = {c: {v: np.mean(vals) for v, vals in view_dict.items()} 
+                           for c, view_dict in class_errors.items()}
+            final_stats[name] = mean_errors
+            
+        return final_stats
+
     def plot_radar_charts(self, stats, suffix=""):
         categories = list(self.view_dims.keys())
         N = len(categories)
@@ -188,8 +227,6 @@ class ModelComparator:
         fig, axes = plt.subplots(2, 5, figsize=(20, 9), subplot_kw=dict(polar=True))
         axes = axes.flatten()
         
-        # Pre-defined colors for standard model types
-        # Heuristic matching based on name content
         def get_color(name):
             if 'SMLVM' in name: return 'black'
             if 'Random' in name: return 'magenta'
@@ -217,6 +254,36 @@ class ModelComparator:
         plt.tight_layout()
         plt.savefig(f"comparison_radar_recon{suffix}.png")
         print(f"Saved radar: comparison_radar_recon{suffix}.png")
+
+    def get_log_dir(self, exp_name):
+        ckpt_dir_prefix = self.dirs[exp_name]
+        candidates = glob.glob(f"logs/{ckpt_dir_prefix}*")
+        if not candidates:
+            # Try recursive or exact match
+            candidates = glob.glob(f"{ckpt_dir_prefix}*") 
+            if not candidates:
+                 print(f"⚠️ Warning: No logs found for {exp_name}")
+                 return None
+        return sorted(candidates)[-1]
+
+    def extract_loss_history(self):
+        loss_data = {}
+        for name in self.dirs.keys():
+            log_dir = self.get_log_dir(name)
+            if not log_dir:
+                continue
+            try:
+                ea = EventAccumulator(log_dir)
+                ea.Reload()
+                tags = ea.Tags()['scalars']
+                if 'Loss/Total' in tags:
+                    events = ea.Scalars('Loss/Total')
+                    steps = [e.step for e in events]
+                    values = [e.value for e in events]
+                    loss_data[name] = (steps, values)
+            except Exception as e:
+                print(f"⚠️ Error reading logs for {name}: {e}")
+        return loss_data
 
     def plot_loss_curves(self, loss_data, suffix=""):
         plt.figure(figsize=(10, 6))
