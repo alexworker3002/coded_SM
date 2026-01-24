@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 # Configuration
-CONFIG_DIR = "configs/vae_batch"
+CONFIG_DIR = "configs/dim_batch"
 CHECKPOINT_DIR = "checkpoints"
 PYTHON_EXEC = sys.executable # Use current python
 
