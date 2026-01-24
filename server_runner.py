@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 # Configuration
-CONFIG_DIR = "configs/grid"
+CONFIG_DIR = "configs/vae_batch"
 CHECKPOINT_DIR = "checkpoints"
 PYTHON_EXEC = sys.executable # Use current python
 
