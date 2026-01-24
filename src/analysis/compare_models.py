@@ -13,6 +13,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from torch.utils.data import DataLoader
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 # Local Imports
 from src.models.cng_model import CNG_MV_GPLVM
@@ -261,6 +262,75 @@ class ModelComparator:
         plt.savefig("comparison_radar_recon.png")
         print("Saved radar chart to comparison_radar_recon.png")
 
+    def get_log_dir(self, exp_name):
+        ckpt_dir_prefix = self.dirs[exp_name]
+        # Logs usually have same prefix/timestamp logic but in 'logs/' instead of 'checkpoints/'
+        # Pattern: logs/{ckpt_dir_prefix}*
+        
+        candidates = glob.glob(f"logs/{ckpt_dir_prefix}*")
+        if not candidates:
+            # Try recursive or exact match
+            candidates = glob.glob(f"{ckpt_dir_prefix}*") # If full path given
+            if not candidates:
+                 print(f"⚠️ Warning: No logs found for {exp_name}")
+                 return None
+        
+        return sorted(candidates)[-1]
+
+    def extract_loss_history(self):
+        loss_data = {}
+        for name in self.dirs.keys():
+            log_dir = self.get_log_dir(name)
+            if not log_dir:
+                continue
+                
+            print(f"Loading logs for {name} from {log_dir}...")
+            try:
+                ea = EventAccumulator(log_dir)
+                ea.Reload()
+                
+                # Check available tags
+                tags = ea.Tags()['scalars']
+                if 'Loss/Total' in tags:
+                    events = ea.Scalars('Loss/Total')
+                    steps = [e.step for e in events]
+                    values = [e.value for e in events]
+                    loss_data[name] = (steps, values)
+                else:
+                    print(f"⚠️ 'Loss/Total' not found in logs for {name}")
+            except Exception as e:
+                print(f"⚠️ Error reading logs for {name}: {e}")
+                
+        return loss_data
+
+    def plot_loss_curves(self, loss_data):
+        plt.figure(figsize=(10, 6))
+        
+        colors = {
+            'SMLVM (Uncoded, L=1)': 'black',
+            'VAE-CNN (L=5, Random)': 'red',
+            'VAE-CNN (L=5, Rep)': 'blue',
+            'VAE-MLP (L=5, Random)': 'magenta',
+            'VAE-MLP (L=5, Rep)': 'cyan',
+            'VAE-CNN (L=10, Random)': 'darkred',
+            'VAE-CNN (L=10, Rep)': 'navy',
+            'VAE-MLP (L=10, Random)': 'darkmagenta',
+            'VAE-MLP (L=10, Rep)': 'teal'
+        }
+        
+        for name, (steps, values) in loss_data.items():
+            color = colors.get(name, None)
+            plt.plot(steps, values, label=name, color=color, alpha=0.8, linewidth=1.5)
+            
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss (ELBO)')
+        plt.title('Training Loss Comparison')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig("comparison_loss_curves.png")
+        print("Saved loss curve plot to comparison_loss_curves.png")
+
     def run(self):
         # 1. Latent Space
         latents = self.extract_latents()
@@ -269,6 +339,11 @@ class ModelComparator:
         # 2. Redisual/Recon Radar
         recon_stats = self.compute_class_wise_recon()
         self.plot_radar_charts(recon_stats)
+        
+        # 3. Loss Curves
+        loss_data = self.extract_loss_history()
+        if loss_data:
+            self.plot_loss_curves(loss_data)
     
     def plot_aggregated_metrics(self):
          # Placeholder for functionality defined in task boundaries
