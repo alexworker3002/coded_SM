@@ -18,10 +18,11 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
         os.makedirs(data_dir)
     
     file_path = os.path.join(data_dir, "Caltech101-7.mat")
-    
+
     # Mirror URLs for Caltech101-7 .mat file
     # Try multiple sources as some might be 404 or region-blocked
     urls = [
+        "https://github.com/ChuanbinZhang/Multi-view-datasets/raw/master/Caltech101-7.mat",
         "https://github.com/SubhadeepNag/Multi-View-Clustering/raw/master/datasets/Caltech101-7.mat", 
         "https://github.com/yeqinglee/mvdata/raw/master/Caltech101-7.mat",
         "https://github.com/ZhiqiangXu/MvC_Data/raw/master/Caltech101-7.mat",
@@ -99,12 +100,23 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
     # X: (1, 6) object array. Each element is (1474, dim)
     # Y: (1474, 1) labels
     
-    if 'X' not in mat or 'Y' not in mat:
+    # Structure Check
+    # Support both 'Y' (uppercase) and 'y' (lowercase)
+    label_key = 'Y' if 'Y' in mat else ('y' if 'y' in mat else None)
+    
+    if 'X' not in mat or label_key is None:
          # Fallback check for other versions
-         raise ValueError("Invalid .mat format: keys 'X' and 'Y' expected.")
+         raise ValueError(f"Invalid .mat format: keys 'X' and 'Y'/'y' expected. Found: {list(mat.keys())}")
 
-    raw_X = mat['X'][0]  # Object array containing 6 views
-    raw_Y = mat['Y']     # Labels
+    raw_X = mat['X']
+    
+    # Handle Transposed X (some datasets have (1, 6) or (6, 1))
+    if raw_X.shape[0] == 6 and raw_X.shape[1] == 1:
+        raw_X = raw_X.flatten() # -> (6,)
+    elif raw_X.shape[0] == 1 and raw_X.shape[1] == 6:
+        raw_X = raw_X[0] # -> (6,)
+        
+    raw_Y = mat[label_key]     # Labels
     
     # Convert labels
     labels = torch.tensor(raw_Y.flatten(), dtype=torch.long)
