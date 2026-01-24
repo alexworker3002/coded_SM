@@ -63,6 +63,12 @@ def generate_dim_batch():
             'name': f'vae_mlp_Z{z}_L2_random',
             'z': z, 'L': 2, 'ecc': 'random_gaussian', 'inf': 'amortized', 'enc': 'mlp'
         })
+
+        # 4. VAE-MLP (No ECC) - New Requirement
+        configs.append({
+            'name': f'vae_mlp_Z{z}_no_ecc',
+            'z': z, 'L': 1, 'ecc': 'none', 'inf': 'amortized', 'enc': 'mlp'
+        })
         
     print(f"Generating {len(configs)} configurations in {output_dir}...")
     

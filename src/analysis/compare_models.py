@@ -231,6 +231,7 @@ class ModelComparator:
             if 'SMLVM' in name: return 'black'
             if 'Random' in name: return 'magenta'
             if 'Rep' in name: return 'cyan'
+            if 'NoECC' in name: return 'green'
             return 'gray'
 
         for c in range(10):
@@ -291,6 +292,7 @@ class ModelComparator:
             if 'SMLVM' in name: return 'black'
             if 'Random' in name: return 'magenta'
             if 'Rep' in name: return 'cyan'
+            if 'NoECC' in name: return 'green'
             return 'gray'
             
         for name, (steps, values) in loss_data.items():
@@ -312,17 +314,20 @@ if __name__ == "__main__":
         "Z2": {
             "SMLVM (Z=2)": "smlvm_Z2_L1",
             "VAE-Rep (Z=2)": "vae_mlp_Z2_L2_rep",
-            "VAE-Random (Z=2)": "vae_mlp_Z2_L2_random"
+            "VAE-Random (Z=2)": "vae_mlp_Z2_L2_random",
+            "VAE-NoECC (Z=2)": "vae_mlp_Z2_no_ecc"
         },
         "Z5": {
             "SMLVM (Z=5)": "smlvm_Z5_L1",
             "VAE-Rep (Z=5)": "vae_mlp_Z5_L2_rep",
-            "VAE-Random (Z=5)": "vae_mlp_Z5_L2_random"
+            "VAE-Random (Z=5)": "vae_mlp_Z5_L2_random",
+            "VAE-NoECC (Z=5)": "vae_mlp_Z5_no_ecc"
         },
         "Z10": {
             "SMLVM (Z=10)": "smlvm_Z10_L1",
             "VAE-Rep (Z=10)": "vae_mlp_Z10_L2_rep",
-            "VAE-Random (Z=10)": "vae_mlp_Z10_L2_random"
+            "VAE-Random (Z=10)": "vae_mlp_Z10_L2_random",
+            "VAE-NoECC (Z=10)": "vae_mlp_Z10_no_ecc"
         }
     }
     
