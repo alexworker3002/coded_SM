@@ -1,6 +1,9 @@
 # src/trainer/engine.py
 
 import os
+# Fix for Mac OpenMP duplicate library error
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import yaml
 import torch
 import torch.optim as optim
@@ -53,8 +56,11 @@ class Trainer:
         try:
             self.dataset = load_mfeat_data(mode="real")
         except FileNotFoundError:
-            print("[Trainer] Real data not found, falling back to MOCK mode.")
-            self.dataset = load_mfeat_data(mode="mock")
+            print("[Trainer] Real data not found. Attempting to download...")
+            from src.utils.data_download import download_mfeat
+            download_mfeat()
+            print("[Trainer] Download complete. Reloading dataset...")
+            self.dataset = load_mfeat_data(mode="real")
         
         # DataLoader
         self.batch_size = self.cfg['training']['batch_size']
@@ -80,6 +86,19 @@ class Trainer:
         use_ecc = True
         if 'ecc_type' in feature_cfg and feature_cfg['ecc_type'] == 'none':
             use_ecc = False
+        
+        # Read Inference Mode (New param)
+        inference_mode = 'direct'
+        if 'model' in self.cfg and 'inference_mode' in self.cfg['model']:
+            inference_mode = self.cfg['model']['inference_mode']
+            
+        # Read Encoder Type
+        encoder_type = 'mlp'
+        if 'model' in self.cfg and 'encoder_type' in self.cfg['model']:
+            encoder_type = self.cfg['model']['encoder_type']
+            
+        # Get ECC Mode
+        ecc_mode = feature_cfg.get('ecc_type', 'repetition')
             
         self.model = CNG_MV_GPLVM(
             num_data=self.num_data,
@@ -89,6 +108,10 @@ class Trainer:
             use_ecc=use_ecc,
             num_mixtures=kernel_cfg['num_mixtures'],
             rff_samples=kernel_cfg['rff_samples'],
+            ecc_matrix_path=None,
+            inference_mode=inference_mode,
+            ecc_mode=ecc_mode,
+            encoder_type=encoder_type 
         ).to(self.device)
         
         # Optimizer

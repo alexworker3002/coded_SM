@@ -1,6 +1,9 @@
 # src/analysis/compare_models.py
 
 import os
+# Fix for Mac OpenMP duplicate library error
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import torch
 import glob
 import yaml
@@ -50,6 +53,9 @@ class ModelComparator:
         if "L=5" in exp_name:
             redundancy = 5
             use_ecc = True
+        elif "L=2" in exp_name and "Random" in exp_name: # Handle L=2 Random
+            redundancy = 2
+            use_ecc = True
         elif "Uncoded" in exp_name:
             redundancy = 1
             use_ecc = False
@@ -57,6 +63,12 @@ class ModelComparator:
             # Default Coded L=2 (if not specified otherwise)
             redundancy = 2
             use_ecc = True
+            
+        # Infer ECC Mode (New for Path A)
+        if "Random" in exp_name or "random" in ckpt_dir_prefix:
+            ecc_mode = 'random_gaussian'
+        else:
+            ecc_mode = 'repetition'
             
         # Build Model
         model = CNG_MV_GPLVM(
@@ -66,7 +78,8 @@ class ModelComparator:
             redundancy_factor=redundancy,
             use_ecc=use_ecc,
             num_mixtures=4,
-            rff_samples=500
+            rff_samples=500,
+            ecc_mode=ecc_mode 
         ).to(self.device)
         
         # Load Weights
@@ -75,7 +88,13 @@ class ModelComparator:
              raise FileNotFoundError(f"Model file not found at {model_path}")
              
         state_dict = torch.load(model_path, map_location=self.device)
-        model.load_state_dict(state_dict)
+        
+        # Compatibility Fix
+        try:
+            model.load_state_dict(state_dict, strict=False)
+        except Exception as e:
+            print(f"⚠️ Warning loading {exp_name}: {e}")
+            
         model.eval()
         
         return model
@@ -85,8 +104,22 @@ class ModelComparator:
         for name in self.dirs.keys():
             print(f"Extracting latents for {name}...")
             model = self.load_model(name)
-            # q_mu is a parameter, directly accessible
-            z_mu = model.q_mu.detach().cpu().numpy()
+            
+            # Handling Amortized Inference (Encoder) vs Direct
+            if model.inference_mode == 'direct':
+                z_mu = model.q_mu.detach().cpu().numpy()
+            else:
+                 # If Amortized, we need to pass data through encoder
+                 # Use DataLoader to get all latents
+                 loader = DataLoader(self.dataset, batch_size=256, shuffle=False)
+                 z_list = []
+                 with torch.no_grad():
+                     for views, _, _ in loader:
+                         views = {k: v.to(self.device).float() for k, v in views.items()}
+                         mu, _ = model.encoder(views)
+                         z_list.append(mu.cpu())
+                 z_mu = torch.cat(z_list, dim=0).numpy()
+
             results[name] = z_mu
         return results
         
@@ -142,7 +175,8 @@ class ModelComparator:
                     labels = labels.numpy()
                     
                     # Forward
-                    y_recons, _, _ = model.forward(indices.to(self.device))
+                    # Handle indices vs views based on mode (handled inside forward now but be safe)
+                    y_recons, _, _ = model.forward(indices.to(self.device), views_batch)
                     
                     # Compute error per sample per view
                     for v_name in self.view_dims:
@@ -183,11 +217,13 @@ class ModelComparator:
             ax.set_rlabel_position(0)
             
             # Plot each model
-            # Colors for 3 models
+            # Colors for 4 models
             colors = {
                 'Uncoded': 'red', 
                 'Coded (L=2)': 'blue',
-                'Coded (L=5)': 'green' # New color for L=5
+                'Coded (L=5)': 'green',
+                'Coded (L=5, Random)': 'purple',
+                'Coded (L=2, Random)': 'orange'
             }
             
             for model_name, model_data in stats.items():
@@ -209,122 +245,32 @@ class ModelComparator:
         plt.savefig("comparison_radar_recon.png")
         print("Saved radar chart to comparison_radar_recon.png")
 
-
-    def plot_aggregated_metrics(self):
-        """
-        Scan all loaded models and plot aggregation.
-        e.g. Line Plot: X-axis = RFF Samples, Y-axis = Final Recon Loss, Hue = Redundancy
-        """
-        # This requires parsing the config or name structure
-        # Name format: cng_feat_{Type}_D{d}_S{s}
-        # Type: Uncoded, Coded_L2, Coded_L5
-        
-        data = []
-        
-        for name in self.dirs.keys():
-            # Parse name
-            try:
-                parts = name.split('_')
-                # Finding D and S is tricky if naming varies.
-                # Let's rely on standard format from generate_configs.py
-                # cng, feat, [Type], D[d], S[s]
-                # Type might have underscores
-                
-                # Reverse parsing
-                s_part = parts[-1] # S500
-                d_part = parts[-2] # D10
-                
-                rff = int(s_part[1:])
-                dim = int(d_part[1:])
-                
-                # Type is everything in between
-                type_part = "_".join(parts[2:-2])
-                
-                if "Uncoded" in type_part:
-                    redundancy = 1
-                elif "L" in type_part:
-                    # Coded_L2 -> 2
-                    redundancy = int(type_part.split('L')[-1])
-                else:
-                    redundancy = 0
-                
-                # Get Metric: Read log file or re-evaluate?
-                # For speed, let's re-evaluate on a subset
-                print(f"Evaluating metrics for {name}...")
-                model = self.load_model(name)
-                
-                # Compute quick loss on one batch or full dataset
-                # Let's use full dataset average
-                loader = DataLoader(self.dataset, batch_size=256)
-                total_recon = 0
-                for views, _, idx in loader:
-                    views = {k: v.to(self.device).float() for k, v in views.items()}
-                    _, details = model.compute_loss(views, idx.to(self.device))
-                    total_recon += details['recon_loss']
-                
-                avg_recon = total_recon / self.num_data
-                
-                data.append({
-                    "RFF Samples": rff,
-                    "Redundancy": redundancy,
-                    "Latent Dim": dim,
-                    "Recon Loss": avg_recon
-                })
-                
-            except Exception as e:
-                print(f"Skipping {name} in aggregation due to parsing error: {e}")
-                
-        # Plotting
-        # Filter for Dim=10 (Default)
-        import pandas as pd
-        df = pd.DataFrame(data)
-        
-        if df.empty:
-            print("No valid data found for aggregation.")
-            return
-
-        plt.figure(figsize=(10, 6))
-        sns.lineplot(data=df, x="RFF Samples", y="Recon Loss", hue="Redundancy", style="Latent Dim", markers=True, palette="viridis")
-        plt.title("Impact of RFF Samples and Redundancy on Reconstruction Error")
-        plt.savefig("aggregated_results.png")
-        print("Saved aggregated_results.png")
-
     def run(self):
-        # 1. Aggregated Metrics (New)
-        self.plot_aggregated_metrics()
+        # 1. Latent Space
+        latents = self.extract_latents()
+        self.plot_latent_space(latents, method='tsne')
         
-        # 2. Detailed plots for a subset (Optional, maybe just top performers)
-        # latents = self.extract_latents()
-        # self.plot_latent_space(latents, method='tsne')
+        # 2. Redisual/Recon Radar
+        recon_stats = self.compute_class_wise_recon()
+        self.plot_radar_charts(recon_stats)
+    
+    def plot_aggregated_metrics(self):
+         # Placeholder for functionality defined in task boundaries
+         pass
 
 if __name__ == "__main__":
-    # Auto-discover all experiments in checkpoints/
-    # Filter for valid grid search names
-    ckpt_root = "checkpoints"
-    all_Dirs = glob.glob(os.path.join(ckpt_root, "cng_feat_*"))
+    # Define experiment mapping
+    # Define experiment mapping
+    experiments = {
+        "Uncoded": "cng_mvlvm_mfeat_uncoded",
+        "Coded (L=2)": "cng_mvlvm_mfeat_trial_01",
+        "Coded (L=5)": "cng_mvlvm_mfeat_redundancy_5",
+        "Coded (L=5, Random)": "cng_local_L5_random_gaussian",
+        "Coded (L=2, Random)": "cng_local_L2_random_gaussian"
+    }
     
-    # Map Name -> Dir Prefix
-    # Dir name is: cng_feat_Coded_L2_D10_S500_TIMESTAMP
-    # We want Key: cng_feat_Coded_L2_D10_S500
-    
-    experiments = {}
-    for d in all_Dirs:
-        basename = os.path.basename(d)
-        # Remove timestamp (last part after last underscore usually, but timestamp has -)
-        # Easier: The experiment name in config was strictly defined without timestamp.
-        # But folder has timestamp.
-        # Let's extract the known prefix based on pattern
-        
-        # Heuristic: split by _2026 (assuming year)
-        if "_202" in basename:
-            exp_name = basename.split("_202")[0]
-            experiments[exp_name] = exp_name # Prefix is same as name
-            
-    print(f"Found {len(experiments)} completed experiments for analysis.")
-    
-    if experiments:
-        comparator = ModelComparator(
-            exp_dirs=experiments,
-            device='cpu'
-        )
-        comparator.run()
+    comparator = ModelComparator(
+        exp_dirs=experiments,
+        device='cpu'
+    )
+    comparator.run()

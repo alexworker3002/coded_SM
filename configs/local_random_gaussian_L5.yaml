@@ -1,0 +1,32 @@
+# Local Run: Coded L=5 with Random Gaussian
+experiment:
+  name: "cng_local_L5_random_gaussian"
+  device: "auto" # Will use MPS on Mac
+  seed: 42
+
+latent_space:
+  info_dim: 10          # 潜变量维度
+  redundancy_factor: 5  # 冗余度 L=5 (X_dim = 50)
+  ecc_type: "random_gaussian" # 纠错码类型: 随机高斯
+
+model:
+  inference_mode: "direct" # 保持标准 GPLVM 模式 (Path A)
+
+kernels:
+  type: "ng_sm"
+  num_mixtures: 4       
+  rff_samples: 500      # 本地运行可以稍微小一点，或者 1000
+
+views:
+  fac: { input_dim: 216, likelihood: "gaussian" }
+  fou: { input_dim: 76,  likelihood: "gaussian" }
+  kar: { input_dim: 64,  likelihood: "gaussian" }
+  pix: { input_dim: 240, likelihood: "gaussian" }
+  zer: { input_dim: 47,  likelihood: "gaussian" }
+  mor: { input_dim: 6,   likelihood: "gaussian" }
+
+training:
+  batch_size: 256
+  lr: 0.01
+  epochs: 500
+  log_interval: 10

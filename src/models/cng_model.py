@@ -30,7 +30,10 @@ class CNG_MV_GPLVM(nn.Module):
                  num_mixtures=4,  # Q: 核函数混合成分数
                  rff_samples=100, # S: RFF 采样数
                  z_init_std=0.01, # q(z) 初始标准差
-                 ecc_matrix_path=None # 预定义的 ECC 矩阵路径
+                 ecc_matrix_path=None, # 预定义的 ECC 矩阵路径
+                 inference_mode='direct', # 'direct' (GPLVM) or 'amortized' (VAE)
+                 ecc_mode='repetition', # 'repetition' or 'random_gaussian'
+                 encoder_type='mlp' # 'mlp' or 'cnn'
                  ):
         super().__init__()
         
@@ -39,20 +42,36 @@ class CNG_MV_GPLVM(nn.Module):
         self.view_dims = view_dims
         self.use_ecc = use_ecc
         self.redundancy_factor = redundancy_factor
+        self.inference_mode = inference_mode
+        self.ecc_mode = ecc_mode
+        self.encoder_type = encoder_type
         
         # =========================================================
-        # 1. Variational Parameters for Latent Z: q(Z)
+        # 1. Variational Inference Strategy
         # =========================================================
-        self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
-        self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+        if self.inference_mode == 'direct':
+            print("[Model] Using Direct Optimization Inference (Standard GPLVM)")
+            self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
+            self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+        elif self.inference_mode == 'amortized':
+            print(f"[Model] Using Amortized Inference (Deep Encoder: {encoder_type})")
+            from src.models.components.encoder import MultiViewEncoder
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+        else:
+            raise ValueError(f"Unknown inference mode: {inference_mode}")
         
         # =========================================================
         # 2. ECC Module (Optional)
         # =========================================================
         if self.use_ecc:
             self.x_dim = input_dim * redundancy_factor
-            self.ecc_module = LinearECCProjection(input_dim, redundancy_factor, matrix_path=ecc_matrix_path)
-            print(f"[Model] Initialized with ECC. Z({input_dim}) -> X({self.x_dim})")
+            self.ecc_module = LinearECCProjection(
+                input_dim, 
+                redundancy_factor, 
+                mode=ecc_mode, 
+                matrix_path=ecc_matrix_path
+            )
+            print(f"[Model] Initialized with ECC ({ecc_mode}). Z({input_dim}) -> X({self.x_dim})")
         else:
             self.x_dim = input_dim
             self.ecc_module = nn.Identity()
@@ -61,10 +80,6 @@ class CNG_MV_GPLVM(nn.Module):
         # =========================================================
         # 3. Multi-View Components (Kernels + Readouts)
         # =========================================================
-        # 为每个视图建立独立的 NG-SM 核、Readout 层和噪声参数
-        # 共享: Z, ECC投影
-        # 独立: Kernel Spectrum, Readout Weights, Noise Variance
-        
         self.kernels = nn.ModuleDict()
         self.readouts = nn.ModuleDict()
         self.log_noise_sigmas = nn.ParameterDict()
@@ -92,22 +107,27 @@ class CNG_MV_GPLVM(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def get_latents(self, batch_indices=None):
-        if batch_indices is None:
-            return self.q_mu, self.q_log_sigma
-        else:
-            return self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+    def get_latents(self, batch_indices=None, views_batch=None):
+        """
+        根据推断模式获取 q(z) 参数
+        """
+        if self.inference_mode == 'direct':
+            if batch_indices is None:
+                return self.q_mu, self.q_log_sigma
+            else:
+                return self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+        
+        elif self.inference_mode == 'amortized':
+            if views_batch is None:
+                raise ValueError("In amortized mode, views_batch must be provided to forward()")
+            return self.encoder(views_batch)
 
-    def forward(self, batch_indices):
+    def forward(self, batch_indices=None, views_batch=None):
         """
         前向传播
-        Returns: 
-            y_recons (dict): {view_name: recon_batch}
-            batch_mu
-            batch_log_sigma
         """
         # 1. 采样 Z
-        batch_mu, batch_log_sigma = self.get_latents(batch_indices)
+        batch_mu, batch_log_sigma = self.get_latents(batch_indices, views_batch)
         z_sample = self.reparameterize(batch_mu, batch_log_sigma)
         
         # 2. ECC 编码: Z -> X
@@ -128,7 +148,8 @@ class CNG_MV_GPLVM(nn.Module):
         """
         views_batch: dict {view_name: tensor}
         """
-        y_recons, mu, log_sigma = self.forward(batch_indices)
+        # Pass views_batch to forward for Amortized Inference support
+        y_recons, mu, log_sigma = self.forward(batch_indices, views_batch)
         
         total_recon_loss = 0.0
         details = {}
@@ -152,6 +173,6 @@ class CNG_MV_GPLVM(nn.Module):
         kl_div = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
         
         details["kl_loss"] = kl_div.item()
-        details["recon_loss"] = total_recon_loss.item() # Fix for KeyError
+        details["recon_loss"] = total_recon_loss.item() 
         
         return total_recon_loss + beta * kl_div, details
