@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 # Data (Don't track large datasets)
-data/raw/
+data/
 data/processed/
 results/
 

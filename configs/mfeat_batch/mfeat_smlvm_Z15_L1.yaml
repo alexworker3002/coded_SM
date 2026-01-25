@@ -1,0 +1,40 @@
+experiment:
+  dataset: mfeat
+  device: auto
+  name: mfeat_smlvm_Z15_L1
+  seed: 42
+kernels:
+  num_mixtures: 4
+  rff_samples: 1000
+  type: ng_sm
+latent_space:
+  ecc_type: none
+  info_dim: 15
+  redundancy_factor: 1
+model:
+  encoder_type: mlp
+  inference_mode: direct
+training:
+  batch_size: 128
+  epochs: 800
+  log_interval: 50
+  lr: 0.01
+views:
+  fac:
+    input_dim: 216
+    likelihood: gaussian
+  fou:
+    input_dim: 76
+    likelihood: gaussian
+  kar:
+    input_dim: 64
+    likelihood: gaussian
+  mor:
+    input_dim: 6
+    likelihood: gaussian
+  pix:
+    input_dim: 240
+    likelihood: gaussian
+  zer:
+    input_dim: 47
+    likelihood: gaussian
