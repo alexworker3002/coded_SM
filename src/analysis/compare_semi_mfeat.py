@@ -28,9 +28,8 @@ def cluster_acc(y_true, y_pred):
     return w[row_ind, col_ind].sum() / y_pred.size
 
 class SemiComparator:
-    def __init__(self, exp_dirs, device='cpu', results_dir="results/semi_mfeat"):
+    def __init__(self, device='cpu', results_dir="results/semi_mfeat"):
         self.device = device
-        self.exp_dirs = exp_dirs
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         
@@ -43,39 +42,38 @@ class SemiComparator:
         self.num_classes = len(np.unique(self.labels))
 
     def load_model(self, exp_prefix):
-        candidates = glob.glob(f"checkpoints/{exp_prefix}*")
+        candidates = sorted(glob.glob(f"checkpoints/{exp_prefix}*"))
         if not candidates:
-            # try relative
-            candidates = glob.glob(f"{exp_prefix}*")
+            # try relative or direct path
+            candidates = sorted(glob.glob(f"{exp_prefix}*"))
             if not candidates:
-                raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
+                 raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
         
-        actual_dir = sorted(candidates)[-1]
+        actual_dir = candidates[-1]
         print(f"[{exp_prefix}] Loading from: {actual_dir}")
         name_lower = exp_prefix.lower()
         
-        input_dim = 10 # Fixed for this batch
+        # Architecture detection from name
+        input_dim = 10
+        redundancy = 2 if "l2" in name_lower else 1
         
-        # Redundancy
-        if "l5" in name_lower: redundancy = 5
-        elif "l2" in name_lower: redundancy = 2
-        else: redundancy = 1
+        if "random" in name_lower: ecc_mode = 'random_gaussian'
+        else: ecc_mode = 'repetition'
+        
+        # ECC logic
+        if "uncoded" in name_lower or "smlvm" in name_lower or redundancy == 1:
+            use_ecc = False
+        else:
+            use_ecc = True
             
-        ecc_mode = 'random_gaussian' if "random" in name_lower else 'repetition'
-        use_ecc = False if ("uncoded" in name_lower or redundancy == 1 or "smlvm" in name_lower) else True
-        
-        inference_mode = 'direct'
-        if 'semi' in name_lower and 'semi_mfeat' in name_lower:
-             # Check if it is the semi model variant
-             if 'semi_mlp' in name_lower or 'semi_cnn' in name_lower:
-                 inference_mode = 'semi_amortized'
-             elif 'vae' in name_lower:
-                 inference_mode = 'amortized'
-             else:
-                 inference_mode = 'direct' # SMLVM
-        elif 'vae' in name_lower:
+        # Inference mode
+        if "semi" in name_lower and not "smlvm" in name_lower:
+            inference_mode = 'semi_amortized'
+        elif "vae" in name_lower:
             inference_mode = 'amortized'
-
+        else:
+            inference_mode = 'direct'
+            
         encoder_type = 'cnn' if 'cnn' in name_lower else 'mlp'
             
         model = CNG_MV_GPLVM(
@@ -97,11 +95,6 @@ class SemiComparator:
         return model
 
     def get_latents(self, model):
-        # For evaluation, we want Z_enc if available (for robustness check)
-        # SMLVM -> Z_opt
-        # VAE -> Z_enc
-        # Semi -> Z_enc (because the goal is to see if Enc learned Z_opt quality)
-        
         if model.inference_mode == 'direct':
             return model.q_mu.detach().cpu().numpy()
             
@@ -109,14 +102,12 @@ class SemiComparator:
         with torch.no_grad():
             for views, _, _ in self.loader:
                 views = {k: v.to(self.device).float() for k, v in views.items()}
-                # get_latents returns tuple in semi mode
                 if model.inference_mode == 'semi_amortized':
                     _, (mu_enc, _) = model.get_latents(views_batch=views)
                     z_list.append(mu_enc.cpu())
                 else:
                     mu = model.encoder(views)[0]
                     z_list.append(mu.cpu())
-                    
         return torch.cat(z_list, dim=0).numpy()
 
     def run_robustness_test(self, model, full_z):
@@ -128,7 +119,7 @@ class SemiComparator:
         count = 0
         
         with torch.no_grad():
-            for i, (views, _, _) in enumerate(self.loader):
+            for i, (views, _, _ ) in enumerate(self.loader):
                 views = {k: v.to(self.device).float() for k, v in views.items()}
                 batch_size = list(views.values())[0].shape[0]
                 masked = {k: (v if k not in drop_views else torch.zeros_like(v)) for k, v in views.items()}
@@ -146,12 +137,19 @@ class SemiComparator:
         return shift / count
 
     def run_benchmark(self):
+        # 11 Models to compare
         experiments = {
             "SMLVM (Direct)": "semi_mfeat_smlvm_Z10",
             "VAE-MLP (Uncoded)": "semi_mfeat_vae_mlp_Z10_uncoded",
-            "VAE-MLP (Rand L=5)": "semi_mfeat_vae_mlp_Z10_L5_random",
-            "Semi-MLP (Rand L=5)": "semi_mfeat_semi_mlp_Z10_L5_random",
-            "Semi-CNN (Rand L=5)": "semi_mfeat_semi_cnn_Z10_L5_random"
+            "VAE-CNN (Uncoded)": "semi_mfeat_vae_cnn_Z10_uncoded",
+            "VAE-MLP-Rep": "semi_mfeat_vae_mlp_Z10_L2_rep",
+            "VAE-MLP-Rand": "semi_mfeat_vae_mlp_Z10_L2_random",
+            "VAE-CNN-Rep": "semi_mfeat_vae_cnn_Z10_L2_rep",
+            "VAE-CNN-Rand": "semi_mfeat_vae_cnn_Z10_L2_random",
+            "Semi-MLP-Rep": "semi_mfeat_semi_mlp_Z10_L2_rep",
+            "Semi-MLP-Rand": "semi_mfeat_semi_mlp_Z10_L2_random",
+            "Semi-CNN-Rep": "semi_mfeat_semi_cnn_Z10_L2_rep",
+            "Semi-CNN-Rand": "semi_mfeat_semi_cnn_Z10_L2_random",
         }
         
         results = []
@@ -170,29 +168,29 @@ class SemiComparator:
                 print(f"✅ {label}: NMI={nmi:.4f}, Shift={shift}")
             except Exception as e:
                 print(f"❌ Failed {label}: {e}")
-                import traceback
-                traceback.print_exc()
 
         df = pd.DataFrame(results)
-        df.to_csv(os.path.join(self.results_dir, "semi_benchmark.csv"), index=False)
+        df.to_csv(os.path.join(self.results_dir, "semi_benchmark_L2.csv"), index=False)
         self.plot(df)
 
     def plot(self, df):
-        fig, ax1 = plt.subplots(figsize=(14, 7))
+        fig, ax1 = plt.subplots(figsize=(16, 8))
+        # NMI Bar
         sns.barplot(data=df, x="Model", y="NMI", ax=ax1, palette="viridis", alpha=0.7)
         ax1.set_ylabel("NMI", fontsize=14)
         ax1.set_ylim(0, 1.0)
         ax1.tick_params(axis='x', rotation=45)
         
+        # Latent Shift Line
         ax2 = ax1.twinx()
         sns.lineplot(data=df, x="Model", y="Latent Shift", ax=ax2, marker='o', color='red', linewidth=3, sort=False)
         ax2.set_ylabel("Latent Shift (Lower is Better)", color='red', fontsize=14)
         
-        plt.title("Semi-Amortized Architecture Benchmark (Mfeat Z=10)")
+        plt.title("Semi-Amortized L=2 Benchmark (Mfeat Z=10)")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, "semi_benchmark.png"))
-        print(f"Saved plot to {self.results_dir}/semi_benchmark.png")
+        plt.savefig(os.path.join(self.results_dir, "semi_benchmark_L2.png"))
+        print(f"Saved plot: {self.results_dir}/semi_benchmark_L2.png")
 
 if __name__ == "__main__":
-    comp = SemiComparator({})
+    comp = SemiComparator()
     comp.run_benchmark()

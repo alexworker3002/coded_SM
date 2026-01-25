@@ -11,7 +11,7 @@ BASE_CONFIG = {
     },
     "latent_space": {
         "info_dim": 10,
-        "redundancy_factor": 1,
+        "redundancy_factor": 2, # Changed to L=2
         "ecc_type": "none"
     },
     "model": {
@@ -36,7 +36,7 @@ BASE_CONFIG = {
         "lr": 0.01,
         "epochs": 800, 
         "log_interval": 50,
-        "alignment_beta": 0.1 # Default for semi
+        "alignment_beta": 0.1 
     }
 }
 
@@ -44,45 +44,37 @@ def generate_semi_mfeat():
     output_dir = "configs/semi_mfeat"
     os.makedirs(output_dir, exist_ok=True)
     
+    # Clean up old configs if needed, but here we just overwrite
     z = 10
-    configs = []
+    L = 2 # Redundancy factor
     
-    # 1. SMLVM (Baseline)
-    configs.append({
-        'name': f'semi_mfeat_smlvm_Z{z}',
-        'z': z, 'L': 1, 'ecc': 'none', 'inf': 'direct', 'enc': 'mlp' 
-    })
-    
-    # 2. VAE-MLP Uncoded (Baseline Amortized)
-    configs.append({
-        'name': f'semi_mfeat_vae_mlp_Z{z}_uncoded',
-        'z': z, 'L': 1, 'ecc': 'none', 'inf': 'amortized', 'enc': 'mlp'
-    })
-    
-    # 3. VAE-MLP Random L=5 (Existing best)
-    configs.append({
-        'name': f'semi_mfeat_vae_mlp_Z{z}_L5_random',
-        'z': z, 'L': 5, 'ecc': 'random_gaussian', 'inf': 'amortized', 'enc': 'mlp'
-    })
-    
-    # 4. [NEW] Semi-Amortized MLP Random L=5
-    configs.append({
-        'name': f'semi_mfeat_semi_mlp_Z{z}_L5_random',
-        'z': z, 'L': 5, 'ecc': 'random_gaussian', 'inf': 'semi_amortized', 'enc': 'mlp'
-    })
-    
-    # 5. [NEW] Semi-Amortized CNN Random L=5
-    configs.append({
-        'name': f'semi_mfeat_semi_cnn_Z{z}_L5_random',
-        'z': z, 'L': 5, 'ecc': 'random_gaussian', 'inf': 'semi_amortized', 'enc': 'cnn'
-    })
+    model_configs = [
+        # 1. Baseline: Direct
+        {'name': f'semi_mfeat_smlvm_Z{z}', 'inf': 'direct', 'enc': 'mlp', 'ecc': 'none', 'L': 1},
+        
+        # 2. Baseline: Amortized Uncoded
+        {'name': f'semi_mfeat_vae_mlp_Z{z}_uncoded', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'L': 1},
+        {'name': f'semi_mfeat_vae_cnn_Z{z}_uncoded', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'none', 'L': 1},
+        
+        # 3. Amortized Coded (L=2)
+        {'name': f'semi_mfeat_vae_mlp_Z{z}_L2_rep', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'repetition', 'L': L},
+        {'name': f'semi_mfeat_vae_mlp_Z{z}_L2_random', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'L': L},
+        {'name': f'semi_mfeat_vae_cnn_Z{z}_L2_rep', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'repetition', 'L': L},
+        {'name': f'semi_mfeat_vae_cnn_Z{z}_L2_random', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'L': L},
+        
+        # 4. Semi-Amortized Coded (L=2)
+        {'name': f'semi_mfeat_semi_mlp_Z{z}_L2_rep', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'repetition', 'L': L},
+        {'name': f'semi_mfeat_semi_mlp_Z{z}_L2_random', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'L': L},
+        {'name': f'semi_mfeat_semi_cnn_Z{z}_L2_rep', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'repetition', 'L': L},
+        {'name': f'semi_mfeat_semi_cnn_Z{z}_L2_random', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'L': L},
+    ]
 
-    print(f"Generating {len(configs)} configurations in {output_dir}...")
+    print(f"Generating {len(model_configs)} configurations in {output_dir}...")
     
-    for c in configs:
+    for c in model_configs:
         cfg = copy.deepcopy(BASE_CONFIG)
         cfg['experiment']['name'] = c['name']
-        cfg['latent_space']['info_dim'] = c['z']
+        cfg['latent_space']['info_dim'] = z
         cfg['latent_space']['redundancy_factor'] = c['L']
         cfg['latent_space']['ecc_type'] = c['ecc']
         cfg['model']['inference_mode'] = c['inf']
