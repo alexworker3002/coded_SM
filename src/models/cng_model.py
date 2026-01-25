@@ -189,7 +189,13 @@ class CNG_MV_GPLVM(nn.Module):
         views_batch: dict {view_name: tensor}
         """
         # Pass views_batch to forward for Amortized Inference support
-        y_recons, mu, log_sigma = self.forward(batch_indices, views_batch)
+        outputs = self.forward(batch_indices, views_batch)
+        
+        if self.inference_mode == 'semi_amortized':
+            y_recons, mu, log_sigma, mu_enc = outputs
+        else:
+            y_recons, mu, log_sigma = outputs
+            mu_enc = None
         
         total_recon_loss = 0.0
         details = {}

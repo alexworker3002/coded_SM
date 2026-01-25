@@ -62,17 +62,32 @@ def run_experiment(cfg_path, gpu_id=None):
     cmd = [PYTHON_EXEC, "-m", "src.trainer.engine", "--config", cfg_path]
     
     try:
-        # We capture output if running in parallel to avoid garbled console, 
-        # or just let it print if sequential. 
-        # For parallel, it's better to log to a file per experiment.
+        # If max_workers is 1, pipe directly to terminal for real-time monitoring
+        # If in parallel, capture to file to avoid garbled output
         log_file = os.path.join("logs", f"run_{basename}.log")
         os.makedirs("logs", exist_ok=True)
         
-        with open(log_file, "w") as f:
-            subprocess.check_call(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
+        # We check an environment variable or worker count
+        is_parallel = int(os.environ.get("MAX_WORKERS", "0")) > 1 or multiprocessing.cpu_count() > 1 # Approximation
+        # But a better way is to check the current calling context if possible.
+        # For now, let's use a simple rule: if it's called from a pool, it's parallel.
+        # Actually, let's just use terminal if log_file is None or an explicit flag.
+        
+        # New logic: By default, if it's the only job, show it.
+        # If MAX_WORKERS > 1, use log file.
+        max_workers = int(os.environ.get("MAX_WORKERS", "1"))
+        
+        if max_workers <= 1:
+            print(f"[Runner] --- Console Output for {basename} ---")
+            subprocess.check_call(cmd, env=env)
+        else:
+            with open(log_file, "w") as f:
+                subprocess.check_call(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
             
         duration = time.time() - start_time
-        print(f"[Runner] ✅ COMPLETED: {basename} in {duration:.2f}s (Log: {log_file})")
+        print(f"[Runner] ✅ COMPLETED: {basename} in {duration:.2f}s")
+        if max_workers > 1:
+            print(f"[Runner]    (Log: {log_file})")
         return True
     except subprocess.CalledProcessError as e:
         print(f"[Runner] ❌ FAILED: {basename} (Check: {log_file})")

@@ -8,17 +8,14 @@ RESULTS_DIR="results/semi_mfeat"
 echo ">>> [1/3] Generating Semi-Amortized Configurations (Z=10)..."
 python src/utils/generate_semi_mfeat.py
 
-echo ">>> [2/3] Training Models (Multi-GPU Parallel)..."
+echo ">>> [2/3] Training Models (Sequential Real-time Output)..."
 mkdir -p logs/semi_mfeat
 
-# Run server_runner with CONFIG_DIR env var
-nohup python server_runner.py > logs/semi_mfeat/pipeline.log 2>&1 &
-PID=$!
+# Run server_runner in foreground to see real-time progress
+export MAX_WORKERS=1 
+python server_runner.py 
+# Training completion is managed by server_runner in foreground
 
-echo "Training started in background (PID: $PID)."
-echo "Log: logs/semi_mfeat/pipeline.log"
-echo "Waiting for completion..."
-wait $PID
 echo "Training Complete."
 
 echo ">>> [3/3] Running Analysis..."
