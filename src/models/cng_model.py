@@ -57,6 +57,14 @@ class CNG_MV_GPLVM(nn.Module):
             print(f"[Model] Using Amortized Inference (Deep Encoder: {encoder_type})")
             from src.models.components.encoder import MultiViewEncoder
             self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+        elif self.inference_mode == 'semi_amortized':
+            print(f"[Model] Using SEMI-Amortized Inference (Direct + Encoder: {encoder_type})")
+            # 1. Direct Parameters (for Z_opt)
+            self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
+            self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+            # 2. Encoder (to be aligned)
+            from src.models.components.encoder import MultiViewEncoder
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
         else:
             raise ValueError(f"Unknown inference mode: {inference_mode}")
         
@@ -110,6 +118,7 @@ class CNG_MV_GPLVM(nn.Module):
     def get_latents(self, batch_indices=None, views_batch=None):
         """
         根据推断模式获取 q(z) 参数
+        Semi-Amortized: returns (mu_opt, log_sigma_opt) AND (mu_enc, log_sigma_enc)
         """
         if self.inference_mode == 'direct':
             if batch_indices is None:
@@ -121,14 +130,42 @@ class CNG_MV_GPLVM(nn.Module):
             if views_batch is None:
                 raise ValueError("In amortized mode, views_batch must be provided to forward()")
             return self.encoder(views_batch)
+            
+        elif self.inference_mode == 'semi_amortized':
+            # Direct Part
+            if batch_indices is None:
+                mu_opt, log_var_opt = self.q_mu, self.q_log_sigma
+            else:
+                mu_opt, log_var_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+            
+            # Encoder Part
+            if views_batch is None:
+                # During global eval or something, we might want just Opt?
+                # But typically we provide batch.
+                mu_enc, log_sigma_enc = None, None
+            else:
+                mu_enc, log_sigma_enc = self.encoder(views_batch)
+                
+            return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
 
     def forward(self, batch_indices=None, views_batch=None):
         """
         前向传播
         """
         # 1. 采样 Z
-        batch_mu, batch_log_sigma = self.get_latents(batch_indices, views_batch)
-        z_sample = self.reparameterize(batch_mu, batch_log_sigma)
+        latents = self.get_latents(batch_indices, views_batch)
+        
+        if self.inference_mode == 'semi_amortized':
+            (mu_opt, log_sigma_opt), (mu_enc, _) = latents
+            # For reconstruction, we use Z_opt (Direct Optimization)
+            z_sample = self.reparameterize(mu_opt, log_sigma_opt)
+            # We return mu_enc for Alignment Loss calculation in engine
+            batch_mu = mu_opt
+            batch_log_sigma = log_sigma_opt
+        else:
+            batch_mu, batch_log_sigma = latents
+            z_sample = self.reparameterize(batch_mu, batch_log_sigma)
+            mu_enc = None # Placeholder
         
         # 2. ECC 编码: Z -> X
         x_sample = self.ecc_module(z_sample)
@@ -142,6 +179,9 @@ class CNG_MV_GPLVM(nn.Module):
             # Readout: Phi_v -> Y_hat_v
             y_recons[name] = self.readouts[name](features)
         
+        if self.inference_mode == 'semi_amortized':
+            return y_recons, batch_mu, batch_log_sigma, mu_enc
+            
         return y_recons, batch_mu, batch_log_sigma
 
     def compute_loss(self, views_batch, batch_indices, beta=1.0):

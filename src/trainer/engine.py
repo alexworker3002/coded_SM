@@ -149,19 +149,56 @@ class Trainer:
             
             # Forward + Loss
             # beta = 1.0 (Standard VAE), can be annealed
+            # Forward + Loss
+            # beta = 1.0 (Standard VAE), can be annealed
             loss, details = self.model.compute_loss(views_batch, indices, beta=1.0)
+            
+            # --- Alignment Loss (Semi-Amortized) ---
+            if self.model.inference_mode == 'semi_amortized':
+                # Get mu_opt and mu_enc (need to call forward again? No, compute_loss handled it inside?)
+                # Wait, compute_loss returns loss scalar. We modified forward but compute_loss wrapper hides mu_enc.
+                # WE NEED TO RETRIEVE mu_enc.
+                # Let's call forward explicitly here to get the tensors for alignment.
+                # Actually, calling forward twice is wasteful.
+                # Improving cng_model.compute_loss to include alignment is better, OR
+                # Let's extract mu_opt and mu_enc here.
+                outputs = self.model(indices, views_batch)
+                # outputs: y_recons, mu, log_sigma, [mu_enc]
+                
+                # Unpack
+                mu_opt = outputs[1]
+                mu_enc = outputs[3]
+                
+                # Loss = ||mu_opt.detach() - mu_enc||^2 (We want Encoder to chase Opt)
+                # Note: We detach mu_opt because Encoder training shouldn't pull Z_opt?
+                # Actually, if we want Joint optimization, maybe not detach?
+                # User rq: "Simultaneous optimization". But usually we align Enc TO Z.
+                # Let's detach Z_opt to stabilize encoder training.
+                align_loss = torch.nn.functional.mse_loss(mu_enc, mu_opt.detach(), reduction='sum')
+                
+                # Weight
+                align_beta = self.cfg.get('training', {}).get('alignment_beta', 0.1)
+                
+                # Add to total loss. 
+                # Note: 'loss' from compute_loss already includes ELBO(Z_opt).
+                # New Loss = ELBO(Z_opt) + align_beta * MSE
+                loss = loss + align_beta * align_loss
+                details['align_loss'] = align_loss.item()
             
             loss.backward()
             self.optimizer.step()
             
-            # Stats (scaled by batch size already in compute_loss? No, compute_loss returns SUM)
-            # Typically valid batch loss to display is average
+            # Stats
             batch_size = len(indices)
             total_loss += loss.item()
             total_recon += details['recon_loss']
-            total_kl += details['kl_loss']
+            total_kl += details.get('kl_loss', 0)
             
-            progress_bar.set_postfix({'loss': loss.item() / batch_size})
+            postfix_dict = {'loss': loss.item() / batch_size}
+            if 'align_loss' in details:
+                postfix_dict['align'] = details['align_loss'] / batch_size
+                
+            progress_bar.set_postfix(postfix_dict)
             
         # Epoch Summary
         avg_loss = total_loss / self.num_data
