@@ -39,10 +39,10 @@ class MultiViewEncoder(nn.Module):
             # Simple Architecture: Conv -> Pool -> Conv -> Pool -> Flatten
             
             self.cnn = nn.Sequential(
-                nn.Conv1d(1, 16, kernel_size=5, stride=1, padding=2),
+                nn.Conv1d(1, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
                 nn.MaxPool1d(2),
-                nn.Conv1d(16, 32, kernel_size=5, stride=1, padding=2),
+                nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
                 nn.MaxPool1d(2)
             )
