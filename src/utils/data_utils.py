@@ -54,3 +54,28 @@ def load_mfeat_data(data_dir="./data/raw", mode="real"):
         labels = torch.tensor(np.repeat(np.arange(10), 200), dtype=torch.long)
     
     return MultiViewDataset(processed_views, labels)
+
+
+def get_dataset(dataset_name, data_dir=None, **kwargs):
+    """
+    Unified dataset factory function.
+    Routes to the appropriate loader based on dataset_name.
+    """
+    dataset_name_lower = dataset_name.lower()
+    
+    if "mfeat" in dataset_name_lower:
+        dir_path = data_dir if data_dir else "./data/raw"
+        return load_mfeat_data(data_dir=dir_path, **kwargs)
+    
+    elif "caltech" in dataset_name_lower:
+        from src.utils.data_caltech import load_caltech_data
+        dir_path = data_dir if data_dir else "./data/caltech"
+        return load_caltech_data(data_dir=dir_path, **kwargs)
+    
+    elif "100leaves" in dataset_name_lower:
+        from src.utils.data_100leaves import load_100leaves_data
+        dir_path = data_dir if data_dir else "./data/100leaves"
+        return load_100leaves_data(data_dir=dir_path, **kwargs)
+    
+    else:
+        raise ValueError(f"Unknown dataset name: {dataset_name}")

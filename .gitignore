@@ -3,8 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data (Don't track large datasets)
-data/
+# Data
+# Note: 100Leaves dataset is now tracked
 data/processed/
 results/
 references/
