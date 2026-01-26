@@ -92,8 +92,9 @@ class CNG_MV_GPLVM(nn.Module):
         self.readouts = nn.ModuleDict()
         self.log_noise_sigmas = nn.ParameterDict()
         
-        # RFF 输出维度 (Bias-free Concatenated Cos/Sin): 2 * Q * S
-        self.feature_dim = 2 * num_mixtures * rff_samples
+        # Feature dim will be obtained from kernel after initialization
+        self.num_mixtures = num_mixtures
+        self.rff_samples = rff_samples
         
         for name, v_dim in view_dims.items():
             # Kernel
@@ -102,8 +103,8 @@ class CNG_MV_GPLVM(nn.Module):
                 num_mixtures=num_mixtures, 
                 rff_samples=rff_samples
             )
-            # Readout
-            self.readouts[name] = nn.Linear(self.feature_dim, v_dim, bias=True)
+            # Readout (use kernel's feature_dim property)
+            self.readouts[name] = nn.Linear(self.kernels[name].feature_dim, v_dim, bias=True)
             # Noise (init log(-2) ~ 0.135)
             self.log_noise_sigmas[name] = nn.Parameter(torch.tensor(-2.0))
 
@@ -267,11 +268,14 @@ class CNG_MV_GPLVM(nn.Module):
             details[f"recon_{name}"] = view_loss.item()
             details[f"sigma_{name}"] = noise_sigma.item()
         
-        # --- 2. KL Divergence for Z (Shared) ---
+        # --- 2. KL Divergence for Z (Yang 2025 Scaling: 1/(N*50)) ---
         var = torch.exp(2 * log_sigma)
-        kl_div = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
+        kl_div_raw = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
+        kl_div_scaled = kl_div_raw / (self.num_data * 50)  # Yang (2025) scaling
         
-        details["kl_loss"] = kl_div.item()
+        details["kl_loss"] = kl_div_raw.item()
+        details["kl_scaled"] = kl_div_scaled.item()
         details["data_loss"] = total_data_loss.item() 
         
-        return total_data_loss + beta * kl_div, details
+        # Total loss = Data Loss + Scaled KL (beta is ignored when using Yang scaling)
+        return total_data_loss + kl_div_scaled, details

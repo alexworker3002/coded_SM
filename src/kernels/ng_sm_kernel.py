@@ -1,106 +1,147 @@
 # src/kernels/ng_sm_kernel.py
+"""
+Next-Gen Spectral Mixture Kernel (NG-SM) - Yang et al. (2025) Aligned Implementation
+
+Key Features:
+- Bivariate Gaussian spectral density with correlation parameter rho
+- Two-step reparameterization trick for dynamic RFF sampling
+- Per-mixture component parameters: mu1, mu2, std1, std2, rho, weight
+"""
 
 import torch
-import math
-import gpytorch
-from gpytorch.kernels import Kernel
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 
-class NextGenSpectralMixtureKernel(Kernel):
+
+class NextGenSpectralMixtureKernel(nn.Module):
     """
-    Next-Gen Spectral Mixture Kernel (NG-SM)
-    基于 Yang et al. (2025) 的实现。
-    使用双变量高斯混合模型拟合谱密度，并利用 RFF 进行近似。
+    NG-SM Kernel with Bivariate Gaussian Spectral Density.
+    
+    Implements the exact formulation from Yang (2025) NG-MVLVM:
+    - Each mixture component q has parameters: (w_q, mu1_q, mu2_q, std1_q, std2_q, rho_q)
+    - RFF features use two-step reparameterization for bivariate Gaussian sampling
+    
+    Parameters:
+        num_dims (int): Latent dimension (Q in paper notation)
+        num_mixtures (int): Number of spectral mixture components (M in paper notation)
+        rff_samples (int): Number of RFF samples per component (L/2 in paper notation)
     """
-    def __init__(self, num_dims, num_mixtures=4, rff_samples=500, **kwargs):
-        super().__init__(**kwargs)
-        self.num_dims = num_dims
-        self.num_mixtures = num_mixtures # Q
-        self.rff_samples = rff_samples   # S
+    def __init__(self, num_dims, num_mixtures=4, rff_samples=50):
+        super().__init__()
+        self.num_dims = num_dims      # Q: latent dimension
+        self.num_mixtures = num_mixtures  # M: mixture components
+        self.rff_samples = rff_samples    # L/2: spectral points per component
         
-        # 1. 注册原始参数 (Raw Parameters)
-        # 我们让 GPyTorch 帮我们要处理约束 (Constraints)，比如方差必须大于0
-        self.register_parameter(
-            name="raw_mixture_weights", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures))
-        )
-        self.register_parameter(
-            name="raw_mixture_means", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures, self.num_dims))
-        )
-        self.register_parameter(
-            name="raw_mixture_scales", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures, self.num_dims))
-        )
-
-        # 2. 注册约束 (Constraints)
-        # 权重和尺度必须为正，使用 Softplus 变换
-        self.register_constraint("raw_mixture_weights", gpytorch.constraints.Positive())
-        self.register_constraint("raw_mixture_scales", gpytorch.constraints.Positive())
+        # ========== Bivariate Gaussian Parameters (per mixture) ==========
+        # log_weight: M x 1 -> weight after softplus
+        self.log_weight = nn.Parameter(torch.randn(num_mixtures, 1))
         
-        # RFF 采样所需的随机相位和频率权重 (固定不训练)
-        # 注意：这里我们先占位，实际 forward 时再根据设备生成或缓存
-        self.register_buffer("random_weights", torch.randn(self.num_mixtures, self.rff_samples, self.num_dims))
-        # REMOVED: self.register_buffer("random_biases", ...) - Using Cos/Sin concatenation instead
-
-    @property
-    def mixture_weights(self):
-        return self.raw_mixture_weights_constraint.transform(self.raw_mixture_weights)
-
-    @property
-    def mixture_scales(self):
-        return self.raw_mixture_scales_constraint.transform(self.raw_mixture_scales)
-
-    @property
-    def mixture_means(self):
-        return self.raw_mixture_means
-
-    def forward(self, x1, x2, diag=False, **params):
-        """
-        NG-SM 通常配合 RFF 使用，不直接计算 Gram 矩阵。
-        但在标准 GPyTorch 框架下，如果要兼容 exact inference，仍需提供 standard forward。
+        # Spectral means: mu1, mu2 (M x Q)
+        # For M=1 (SE kernel), means are fixed at 0
+        if num_mixtures == 1:
+            self.mu1 = nn.Parameter(torch.zeros(num_mixtures, num_dims), requires_grad=False)
+            self.mu2 = nn.Parameter(torch.zeros(num_mixtures, num_dims), requires_grad=False)
+        else:
+            self.mu1 = nn.Parameter(torch.zeros(num_mixtures, num_dims))
+            self.mu2 = nn.Parameter(torch.zeros(num_mixtures, num_dims))
         
-        这里我们主要实现 RFF 特征映射逻辑供 VariationalStrategy 调用。
-        """
-        # 这是一个占位符，因为我们的核心是用 get_rff_feature
-        # 如果你只做变分推断 + RFF，这个 standard forward 其实不会被大规模调用
-        raise NotImplementedError("NG-SM Kernel intended for RFF use only in this project.")
-
+        # Spectral stds: log_std1, log_std2 (M x Q) -> std after softplus
+        self.log_std1 = nn.Parameter(torch.ones(num_mixtures, num_dims))
+        self.log_std2 = nn.Parameter(torch.ones(num_mixtures, num_dims))
+        
+        # Correlation coefficient: rho (M,) - unbounded, will use tanh to constrain to (-1, 1)
+        self.raw_rho = nn.Parameter(torch.zeros(num_mixtures))
+    
+    @property
+    def weight(self):
+        """Mixture weights (positive via softplus)."""
+        return F.softplus(self.log_weight)  # M x 1
+    
+    @property
+    def std1(self):
+        """First marginal std (positive via softplus)."""
+        return F.softplus(self.log_std1)  # M x Q
+    
+    @property
+    def std2(self):
+        """Second marginal std (positive via softplus)."""
+        return F.softplus(self.log_std2)  # M x Q
+    
+    @property
+    def rho(self):
+        """Correlation coefficient (constrained to (-1, 1) via tanh)."""
+        return torch.tanh(self.raw_rho)  # M
+    
     def get_rff_feature(self, x):
         """
-        计算随机傅里叶特征 Z(x)
-        x: [Batch, D]
-        Returns: [Batch, 2 * Q * S] (实部和虚部拼接)
+        Compute Random Fourier Features using Two-Step Reparameterization.
+        
+        Math (Yang 2025, Eq. in _compute_sm_basis):
+            For each mixture component q:
+                eps1 ~ N(0, I), eps2 ~ N(0, I)
+                omega1 = mu1_q + std1_q * eps1
+                omega2 = mu2_q + rho_q * (std2_q / std1_q) * (omega1 - mu1_q) 
+                         + sqrt(1 - rho_q^2) * std1_q * eps2
+                
+                phi_q = sqrt(w_q / (4*S)) * [cos(2π x @ omega1.T) + cos(2π x @ omega2.T),
+                                              sin(2π x @ omega1.T) + sin(2π x @ omega1.T)]
+                                              
+        Args:
+            x: [N, Q] - Latent coordinates
+            
+        Returns:
+            Phi: [N, M * 2 * S] - RFF features (concatenated across all mixtures)
         """
-        # 1. 获取变换后的非负参数
-        w = self.mixture_weights  # [Q]
-        m = self.mixture_means    # [Q, D]
-        s = self.mixture_scales   # [Q, D]
+        N = x.size(0)
+        device = x.device
         
-        # 2. 这里的数学逻辑需严格参考 NG-MVLVM 的 param_gp.py
-        # phi(x) = [ sqrt(w/S) * cos( (s * rand_n + m) * x ) , sqrt(w/S) * sin( (...) * x ) ]
-        # 注意维度的广播 (Broadcasting)
+        # Get transformed parameters
+        w = self.weight        # M x 1
+        s1 = self.std1         # M x Q
+        s2 = self.std2         # M x Q
+        rho = self.rho         # M
         
-        # 扩展维度以进行广播
-        # x: [Batch, 1, 1, D]
-        x_expanded = x.unsqueeze(1).unsqueeze(1) 
+        all_phi = []
         
-        # random_weights: [Q, S, D]
-        # spectral_freqs ~ N(m, s^2) => s * rand_n + m
-        spectral_freqs = s.unsqueeze(1) * self.random_weights + m.unsqueeze(1) # [Q, S, D]
+        for q in range(self.num_mixtures):
+            # Sample random noise for this forward pass (dynamic sampling)
+            eps1 = torch.randn(self.rff_samples, self.num_dims, device=device)  # S x Q
+            eps2 = torch.randn(self.rff_samples, self.num_dims, device=device)  # S x Q
+            
+            # Two-step reparameterization trick for bivariate Gaussian
+            # Step 1: Sample omega1 ~ N(mu1, std1^2)
+            omega1 = self.mu1[q] + s1[q] * eps1  # S x Q
+            
+            # Step 2: Sample omega2 | omega1 (conditional Gaussian)
+            # omega2 = mu2 + rho * (std2/std1) * (omega1 - mu1) + sqrt(1-rho^2) * std1 * eps2
+            rho_q = rho[q]
+            omega2 = (self.mu2[q] + 
+                      rho_q * (s2[q] / s1[q]) * (omega1 - self.mu1[q]) + 
+                      torch.sqrt(1 - rho_q ** 2) * s1[q] * eps2)  # S x Q
+            
+            # Compute spectral projections: x @ omega.T
+            # x: [N, Q], omega: [S, Q] -> projection: [N, S]
+            proj1 = 2 * np.pi * x.matmul(omega1.t())  # N x S
+            proj2 = 2 * np.pi * x.matmul(omega2.t())  # N x S
+            
+            # Compute RFF features (Yang 2025 Eq. 149-150)
+            # Phi_q = sqrt(w_q / (4*S)) * [cos(proj1) + cos(proj2), sin(proj1) + sin(proj1)]
+            # Note: Reference code has sin(proj1) + sin(proj1), which seems like a bug but we follow it exactly
+            amplitude = torch.sqrt(w[q] / (4 * self.rff_samples))  # scalar
+            
+            cos_feat = amplitude * (torch.cos(proj1) + torch.cos(proj2))  # N x S
+            sin_feat = amplitude * (torch.sin(proj1) + torch.sin(proj1))  # N x S (follows reference)
+            
+            # Concatenate cos and sin: [N, 2*S]
+            phi_q = torch.cat([cos_feat, sin_feat], dim=1)
+            all_phi.append(phi_q)
         
-        # 计算内积: sum_d (freq_d * x_d)
-        # [Batch, Q, S]
-        inner_prod = torch.sum(spectral_freqs.unsqueeze(0) * x_expanded, dim=-1)
-        
-        # 计算特征
-        # scaling factor: sqrt(w / S)
-        # S is self.rff_samples
-        amplitude = torch.sqrt(w.view(1, -1, 1) / self.rff_samples)
-        
-        z_cos = amplitude * torch.cos(inner_prod)
-        z_sin = amplitude * torch.sin(inner_prod)
-        
-        # 拼接并展平: [Batch, 2 * Q * S]
-        # cat dim=-1 makes it [Batch, Q, 2*S] -> view -> [Batch, 2*Q*S]
-        feature = torch.cat([z_cos, z_sin], dim=-1).view(x.size(0), -1)
-        return feature
+        # Concatenate across all mixtures: [N, M * 2 * S]
+        Phi = torch.cat(all_phi, dim=1)
+        return Phi
+    
+    @property
+    def feature_dim(self):
+        """Output feature dimension."""
+        return self.num_mixtures * 2 * self.rff_samples
