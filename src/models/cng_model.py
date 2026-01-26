@@ -170,47 +170,100 @@ class CNG_MV_GPLVM(nn.Module):
         # 2. ECC 编码: Z -> X
         x_sample = self.ecc_module(z_sample)
         
-        # 3. Multi-View Mapping
+        # 3. Multi-View Mapping (RFF Features for GP Loss)
         y_recons = {}
+        view_features = {}
         
         for name in self.view_dims.keys():
             # Kernel Mapping: X -> Phi_v(X)
             features = self.kernels[name].get_rff_feature(x_sample)
-            # Readout: Phi_v -> Y_hat_v
+            view_features[name] = features
+            
+            # Readout: Phi_v -> Y_hat_v (For standard VAE loss or prediction)
             y_recons[name] = self.readouts[name](features)
         
         if self.inference_mode == 'semi_amortized':
-            return y_recons, batch_mu, batch_log_sigma, mu_enc
+            return y_recons, batch_mu, batch_log_sigma, mu_enc, view_features
             
-        return y_recons, batch_mu, batch_log_sigma
+        return y_recons, batch_mu, batch_log_sigma, view_features
 
-    def compute_loss(self, views_batch, batch_indices, beta=1.0):
+    def _compute_gp_marginal_nll(self, Phi, y_true, noise_sigma):
+        """
+        利用 Woodbury 恒等式高效计算 GP 边际似然的负对数
+        Phi: (N, D) - RFF 特征
+        y_true: (N, Dy) - 观测数据
+        noise_sigma: (Scalar) - 噪声标准差
+        """
+        N, D = Phi.shape
+        Dy = y_true.shape[1]
+        noise_var = noise_sigma ** 2
+        jitter = 1e-6
+        
+        if N > D:
+            # Woodbury Identity Case (Scalable)
+            # A = Phi^T Phi + sigma^2 I
+            A = Phi.t() @ Phi + (noise_var + jitter) * torch.eye(D, device=Phi.device)
+            L = torch.linalg.cholesky(A)
+            
+            # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
+            Phi_T_Y = Phi.t() @ y_true
+            L_inv_Phi_Y = torch.linalg.solve_triangular(L, Phi_T_Y, upper=False)
+            
+            # neg_log_lik = 0.5 * [ (Y^T Y - ||L_inv_Phi_Y||^2) / noise_var + 2*log|L| + (N-D)*log(noise_var) + N*log(2pi) ]
+            # Note: We divide by N and Dy to keep scale stable for different datasets
+            y_sq_sum = y_true.pow(2).sum()
+            quad_term = (y_sq_sum - L_inv_Phi_Y.pow(2).sum()) / noise_var
+            
+            log_det_A = 2 * torch.log(torch.diag(L)).sum()
+            # log|K| = log|Phi Phi^T + sigma^2 I| = log|Phi^T Phi + sigma^2 I| + (N-D)log(sigma^2)
+            log_det_K = log_det_A + (N - D) * torch.log(torch.tensor(noise_var))
+            
+            nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+        else:
+            # Direct Case (N <= D)
+            K = Phi @ Phi.t() + (noise_var + jitter) * torch.eye(N, device=Phi.device)
+            L = torch.linalg.cholesky(K)
+            L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
+            
+            quad_term = L_inv_Y.pow(2).sum()
+            log_det_K = 2 * torch.log(torch.diag(L)).sum()
+            nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+            
+        return nll
+
+    def compute_loss(self, views_batch, batch_indices, beta=1.0, use_gp_loss=True):
         """
         views_batch: dict {view_name: tensor}
+        use_gp_loss: 是否使用 Yang (2025) 的 GP 边际似然损失
         """
         # Pass views_batch to forward for Amortized Inference support
         outputs = self.forward(batch_indices, views_batch)
         
         if self.inference_mode == 'semi_amortized':
-            y_recons, mu, log_sigma, mu_enc = outputs
+            y_recons, mu, log_sigma, mu_enc, view_features = outputs
         else:
-            y_recons, mu, log_sigma = outputs
+            y_recons, mu, log_sigma, view_features = outputs
             mu_enc = None
         
-        total_recon_loss = 0.0
+        total_data_loss = 0.0
         details = {}
         
-        # --- 1. Reconstruction Loss (Sum over views) ---
+        # --- 1. Data Loss (GP Marginal NLL or Reconstruction MSE) ---
         for name, y_true in views_batch.items():
-            y_pred = y_recons[name]
             noise_sigma = torch.exp(self.log_noise_sigmas[name])
             
-            # NLL
-            mse = (y_true - y_pred).pow(2)
-            nll = torch.log(noise_sigma) + 0.5 * mse / (noise_sigma ** 2)
-            view_loss = nll.sum()
+            if use_gp_loss:
+                # Yang (2025) 核心逻辑: GP Marginal Likelihood
+                Phi = view_features[name]
+                view_loss = self._compute_gp_marginal_nll(Phi, y_true, noise_sigma)
+            else:
+                # 标准 VAE 逻辑: Gaussian Reconstruction NLL
+                y_pred = y_recons[name]
+                mse = (y_true - y_pred).pow(2)
+                nll = torch.log(noise_sigma) + 0.5 * mse / (noise_sigma ** 2)
+                view_loss = nll.sum()
             
-            total_recon_loss += view_loss
+            total_data_loss += view_loss
             details[f"recon_{name}"] = view_loss.item()
             details[f"sigma_{name}"] = noise_sigma.item()
         
@@ -219,6 +272,6 @@ class CNG_MV_GPLVM(nn.Module):
         kl_div = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
         
         details["kl_loss"] = kl_div.item()
-        details["recon_loss"] = total_recon_loss.item() 
+        details["data_loss"] = total_data_loss.item() 
         
-        return total_recon_loss + beta * kl_div, details
+        return total_data_loss + beta * kl_div, details

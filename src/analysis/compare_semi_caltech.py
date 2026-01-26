@@ -51,13 +51,16 @@ class CaltechSemiComparator:
         actual_dir = candidates[-1]
         name_lower = exp_prefix.lower()
         
-        redundancy = L if "l1" not in name_lower and "uncoded" not in name_lower and "smlvm" not in name_lower else 1
-        ecc_mode = 'random_gaussian' if "random" in name_lower else 'repetition'
-        use_ecc = False if (redundancy == 1 or "uncoded" in name_lower or "smlvm" in name_lower) else True
+        # Decide redundancy
+        is_uncoded = ("uncoded" in name_lower or "yang_direct" in name_lower or "yang_amortized" in name_lower)
+        redundancy = 1 if is_uncoded else L
         
-        if "semi" in name_lower and not "smlvm" in name_lower:
+        ecc_mode = 'random_gaussian' if "random" in name_lower else 'repetition'
+        use_ecc = False if redundancy == 1 else True
+        
+        if "semi" in name_lower:
             inference_mode = 'semi_amortized'
-        elif "vae" in name_lower:
+        elif "yang_amortized" in name_lower or "vae" in name_lower:
             inference_mode = 'amortized'
         else:
             inference_mode = 'direct'
@@ -128,17 +131,16 @@ class CaltechSemiComparator:
         print(f"\n>>> Benchmarking Z={z}, L={L}")
         # Models for this group
         models_map = {
-            "SMLVM": f"semi_caltech_smlvm_Z{z}_L{L}",
-            "VAE-MLP-Uncoded": f"semi_caltech_vae_mlp_Z{z}_L{L}_uncoded",
-            "VAE-CNN-Uncoded": f"semi_caltech_vae_cnn_Z{z}_L{L}_uncoded",
-            "VAE-MLP-Rep": f"semi_caltech_vae_mlp_Z{z}_L{L}_rep",
-            "VAE-MLP-Rand": f"semi_caltech_vae_mlp_Z{z}_L{L}_random",
-            "VAE-CNN-Rep": f"semi_caltech_vae_cnn_Z{z}_L{L}_rep",
-            "VAE-CNN-Rand": f"semi_caltech_vae_cnn_Z{z}_L{L}_random",
-            "Semi-MLP-Rep": f"semi_caltech_semi_mlp_Z{z}_L{L}_rep",
-            "Semi-MLP-Rand": f"semi_caltech_semi_mlp_Z{z}_L{L}_random",
-            "Semi-CNN-Rep": f"semi_caltech_semi_cnn_Z{z}_L{L}_rep",
-            "Semi-CNN-Rand": f"semi_caltech_semi_cnn_Z{z}_L{L}_random",
+            "Yang-Direct": f"yang_direct_Z{z}_L{L}",
+            "Yang-Amort-MLP": f"yang_amortized_mlp_Z{z}_L{L}",
+            "Yang-Amort-CNN": f"yang_amortized_cnn_Z{z}_L{L}",
+            "VAE-MLP-Uncoded": f"vae_mlp_Z{z}_L{L}_uncoded",
+            "VAE-MLP-Rep": f"vae_mlp_Z{z}_L{L}_rep",
+            "VAE-MLP-Rand": f"vae_mlp_Z{z}_L{L}_random",
+            "Semi-MLP-Rep": f"semi_mlp_Z{z}_L{L}_rep",
+            "Semi-MLP-Rand": f"semi_mlp_Z{z}_L{L}_random",
+            "Semi-CNN-Rep": f"semi_cnn_Z{z}_L{L}_rep",
+            "Semi-CNN-Rand": f"semi_cnn_Z{z}_L{L}_random",
         }
         
         results = []

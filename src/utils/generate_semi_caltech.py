@@ -51,24 +51,25 @@ def generate_semi_caltech():
     for z in latent_dims:
         for L in redundancy_factors:
             model_configs = [
-                # 1. Baseline: Direct
-                {'name': f'semi_caltech_smlvm_Z{z}_L{L}', 'inf': 'direct', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1},
+                # 1. Yang-Core: SMLVM Direct (GP Loss)
+                {'name': f'yang_direct_Z{z}_L{L}', 'inf': 'direct', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
                 
-                # 2. Baseline: Amortized Uncoded
-                {'name': f'semi_caltech_vae_mlp_Z{z}_L{L}_uncoded', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1},
-                {'name': f'semi_caltech_vae_cnn_Z{z}_L{L}_uncoded', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'none', 'cur_L': 1},
+                # 2. Yang-2025: SMLVM Amortized (GP Loss)
+                {'name': f'yang_amortized_mlp_Z{z}_L{L}', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
+                {'name': f'yang_amortized_cnn_Z{z}_L{L}', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'none', 'cur_L': 1, 'gp': True},
+
+                # 3. Standard VAE: Uncoded (MSE Loss)
+                {'name': f'vae_mlp_Z{z}_L{L}_uncoded', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': False},
                 
-                # 3. Amortized Coded
-                {'name': f'semi_caltech_vae_mlp_Z{z}_L{L}_rep', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L},
-                {'name': f'semi_caltech_vae_mlp_Z{z}_L{L}_random', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L},
-                {'name': f'semi_caltech_vae_cnn_Z{z}_L{L}_rep', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'repetition', 'cur_L': L},
-                {'name': f'semi_caltech_vae_cnn_Z{z}_L{L}_random', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'cur_L': L},
+                # 4. Standard Coded VAE: (MSE Loss + ECC)
+                {'name': f'vae_mlp_Z{z}_L{L}_rep', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': False},
+                {'name': f'vae_mlp_Z{z}_L{L}_random', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': False},
                 
-                # 4. Semi-Amortized Coded
-                {'name': f'semi_caltech_semi_mlp_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L},
-                {'name': f'semi_caltech_semi_mlp_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L},
-                {'name': f'semi_caltech_semi_cnn_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'repetition', 'cur_L': L},
-                {'name': f'semi_caltech_semi_cnn_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'cur_L': L},
+                # 5. Our Semi-Amortized (GP Loss + ECC)
+                {'name': f'semi_mlp_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': True},
+                {'name': f'semi_mlp_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': True},
+                {'name': f'semi_cnn_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'repetition', 'cur_L': L, 'gp': True},
+                {'name': f'semi_cnn_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': True},
             ]
 
             for c in model_configs:
@@ -79,6 +80,7 @@ def generate_semi_caltech():
                 cfg['latent_space']['ecc_type'] = c['ecc']
                 cfg['model']['inference_mode'] = c['inf']
                 cfg['model']['encoder_type'] = c['enc']
+                cfg['training']['use_gp_loss'] = c['gp']
                 
                 filename = f"{output_dir}/{c['name']}.yaml"
                 with open(filename, 'w') as f:
