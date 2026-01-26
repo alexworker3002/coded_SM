@@ -7,10 +7,10 @@ BASE_CONFIG = {
         "name": "template", 
         "device": "auto",  
         "seed": 42,
-        "dataset": "mfeat"
+        "dataset": "100leaves"
     },
     "latent_space": {
-        "info_dim": 10,
+        "info_dim": 32,
         "redundancy_factor": 2, 
         "ecc_type": "none"
     },
@@ -24,12 +24,9 @@ BASE_CONFIG = {
         "rff_samples": 1000 
     },
     "views": {
-        "fac": { "input_dim": 216, "likelihood": "gaussian" },
-        "fou": { "input_dim": 76,  "likelihood": "gaussian" },
-        "kar": { "input_dim": 64,  "likelihood": "gaussian" },
-        "pix": { "input_dim": 240, "likelihood": "gaussian" },
-        "zer": { "input_dim": 47,  "likelihood": "gaussian" },
-        "mor": { "input_dim": 6,   "likelihood": "gaussian" }
+        "shape":   { "input_dim": 64, "likelihood": "gaussian" },
+        "texture": { "input_dim": 64, "likelihood": "gaussian" },
+        "margin":  { "input_dim": 64, "likelihood": "gaussian" }
     },
     "training": {
         "batch_size": 128, 
@@ -41,13 +38,13 @@ BASE_CONFIG = {
     }
 }
 
-def generate_semi_mfeat():
-    output_dir = "configs/semi_mfeat"
+def generate_semi_100leaves():
+    output_dir = "configs/semi_100leaves"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Z chosen for 10 classes
-    latent_dims = [10, 20]
-    # L with 10 as requested
+    # Z chosen for 100 classes
+    latent_dims = [32, 64]
+    # L with added 10 as requested
     redundancy_factors = [2, 5, 10]
     
     count = 0
@@ -90,4 +87,4 @@ def generate_semi_mfeat():
     print(f"Generated {count} configurations in {output_dir}.")
 
 if __name__ == "__main__":
-    generate_semi_mfeat()
+    generate_semi_100leaves()

@@ -27,14 +27,14 @@ def cluster_acc(y_true, y_pred):
     row_ind, col_ind = linear_sum_assignment(w.max() - w)
     return w[row_ind, col_ind].sum() / y_pred.size
 
-class SemiMfeatComparator:
-    def __init__(self, device='cpu', results_dir="results/semi_mfeat"):
+class Semi100LeavesComparator:
+    def __init__(self, device='cpu', results_dir="results/semi_100leaves"):
         self.device = device
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         
-        print("Loading Mfeat Data...")
-        self.dataset = get_dataset(dataset_name="mfeat")
+        print("Loading 100Leaves Data...")
+        self.dataset = get_dataset(dataset_name="100leaves")
         self.loader = DataLoader(self.dataset, batch_size=512, shuffle=False)
         self.num_data = len(self.dataset)
         self.view_dims = {k: v.shape[1] for k, v in self.dataset.views.items()}
@@ -42,7 +42,7 @@ class SemiMfeatComparator:
         self.num_classes = len(np.unique(self.labels))
 
     def load_model(self, exp_prefix, z, L):
-        candidates = sorted(glob.glob(f"checkpoints/mfeat/{exp_prefix}*"))
+        candidates = sorted(glob.glob(f"checkpoints/100leaves/{exp_prefix}*"))
         if not candidates:
             raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
         
@@ -67,7 +67,7 @@ class SemiMfeatComparator:
         else:
             inference_mode = 'amortized'
             
-        encoder_type = 'mlp'
+        encoder_type = 'mlp' # All MLP now
             
         model = CNG_MV_GPLVM(
             num_data=self.num_data,
@@ -110,8 +110,7 @@ class SemiMfeatComparator:
         if model.inference_mode == 'direct':
             return np.nan 
         
-        # Drop one view (e.g., 'mor' - smallest dimension)
-        drop_views = ['mor'] 
+        drop_views = ['texture'] 
         shift = 0
         count = 0
         
@@ -134,7 +133,8 @@ class SemiMfeatComparator:
         return shift / count
 
     def run_benchmark(self, z, L):
-        print(f"\n>>> Benchmarking Mfeat Z={z}, L={L}")
+        print(f"\n>>> Benchmarking 100Leaves Z={z}, L={L}")
+        # Updated model map (MLP only, yang naming)
         models_map = {
             "Yang-Direct": f"yang_direct_Z{z}_L{L}",
             "Yang-Amort-MLP": f"yang_amortized_mlp_Z{z}_L{L}",
@@ -167,7 +167,7 @@ class SemiMfeatComparator:
              return
 
         df = pd.DataFrame(results)
-        df.to_csv(os.path.join(self.results_dir, f"semi_mfeat_Z{z}_L{L}.csv"), index=False)
+        df.to_csv(os.path.join(self.results_dir, f"semi_100leaves_Z{z}_L{L}.csv"), index=False)
         self.plot(df, z, L)
 
     def plot(self, df, z, L):
@@ -181,13 +181,13 @@ class SemiMfeatComparator:
         sns.lineplot(data=df, x="Model", y="Latent Shift", ax=ax2, marker='o', color='red', linewidth=3, sort=False)
         ax2.set_ylabel("Latent Shift (Lower is Better)", color='red', fontsize=14)
         
-        plt.title(f"Mfeat Semi-Amortized Benchmark (Z={z}, L={L})")
+        plt.title(f"100Leaves Semi-Amortized Benchmark (Z={z}, L={L})")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, f"semi_mfeat_Z{z}_L{L}.png"))
+        plt.savefig(os.path.join(self.results_dir, f"semi_100leaves_Z{z}_L{L}.png"))
         plt.close()
 
 if __name__ == "__main__":
-    comp = SemiMfeatComparator()
-    for z in [10, 20]:
+    comp = Semi100LeavesComparator()
+    for z in [32, 64]:
         for L in [2, 5, 10]:
             comp.run_benchmark(z, L)

@@ -14,7 +14,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 # Import Modules
-from src.utils.data_utils import load_mfeat_data
+from src.utils.data_utils import get_dataset, load_mfeat_data
 from src.models.cng_model import CNG_MV_GPLVM
 
 class Trainer:
@@ -37,43 +37,34 @@ class Trainer:
         else:
             self.device = torch.device(self.cfg['experiment']['device'])
             
-        # Logging
+        # Logging - Organized by Dataset
         self.exp_name = self.cfg['experiment']['name']
+        self.dataset_name = self.cfg['experiment'].get('dataset', 'unknown')
         current_time = datetime.now().strftime('%Y%b%d_%H-%M-%S')
-        log_dir = os.path.join('logs', f"{self.exp_name}_{current_time}")
+        log_dir = os.path.join('logs', self.dataset_name, f"{self.exp_name}_{current_time}")
         self.writer = SummaryWriter(log_dir=log_dir)
-        self.ckpt_dir = os.path.join('checkpoints', f"{self.exp_name}_{current_time}")
+        self.ckpt_dir = os.path.join('checkpoints', self.dataset_name, f"{self.exp_name}_{current_time}")
         os.makedirs(self.ckpt_dir, exist_ok=True)
         print(f"[Trainer] Log Dir: {log_dir}")
         print(f"[Trainer] Ckpt Dir: {self.ckpt_dir}")
         
     def prepare_data(self):
-        # Load Dataset
         # 默认模式为 real
         print("[Trainer] Loading Dataset...")
-        # 注意: load_mfeat_data 内部可能会 check 文件是否存在，如果不在会报错
-        # 我们假设已下载
-        print("[Trainer] Loading Dataset...")
         dataset_name = self.cfg['experiment'].get('dataset', 'mfeat')
+        print(f"[Trainer] Loading {dataset_name}...")
         
         try:
-            if dataset_name == 'caltech101-7':
-                print("[Trainer] Using Caltech101-7 Dataset")
-                from src.utils.data_caltech import load_caltech_data
-                self.dataset = load_caltech_data()
-            else:
-                # Default to mfeat
-                self.dataset = load_mfeat_data(mode="real")
+            self.dataset = get_dataset(dataset_name)
         except Exception as e:
             print(f"[Trainer] Error loading dataset {dataset_name}: {e}")
-            if dataset_name == 'mfeat':
-                print("[Trainer] Attempting to download mfeat...")
-                from src.utils.data_download import download_mfeat
-                download_mfeat()
-                print("[Trainer] Download complete. Reloading...")
-                self.dataset = load_mfeat_data(mode="real")
+            if dataset_name == 'mfeat': # Specific fallback for mfeat download
+                 print("[Trainer] Attempting to download mfeat...")
+                 from src.utils.data_download import download_mfeat
+                 download_mfeat()
+                 self.dataset = get_dataset('mfeat')
             else:
-                raise e
+                 raise e
         
         # DataLoader
         self.batch_size = self.cfg['training']['batch_size']

@@ -1,0 +1,33 @@
+experiment:
+  dataset: 100leaves
+  device: auto
+  name: semi_mlp_Z32_L2_random
+  seed: 42
+kernels:
+  num_mixtures: 4
+  rff_samples: 1000
+  type: ng_sm
+latent_space:
+  ecc_type: random_gaussian
+  info_dim: 32
+  redundancy_factor: 2
+model:
+  encoder_type: mlp
+  inference_mode: semi_amortized
+training:
+  alignment_beta: 0.1
+  batch_size: 128
+  epochs: 500
+  log_interval: 50
+  lr: 0.01
+  use_gp_loss: true
+views:
+  margin:
+    input_dim: 64
+    likelihood: gaussian
+  shape:
+    input_dim: 64
+    likelihood: gaussian
+  texture:
+    input_dim: 64
+    likelihood: gaussian
