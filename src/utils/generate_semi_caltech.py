@@ -36,40 +36,32 @@ BASE_CONFIG = {
         "lr": 0.01,
         "epochs": 800, 
         "log_interval": 50,
-        "alignment_beta": 0.1 
+        "alignment_beta": 0.1,
+        "use_gp_loss": True
     }
 }
 
-def generate_semi_caltech():
-    output_dir = "configs/semi_caltech"
-    os.makedirs(output_dir, exist_ok=True)
+def generate_semi_caltech(output_root="configs/semi_caltech"):
+    os.makedirs(output_root, exist_ok=True)
     
-    latent_dims = [20, 40]
+    # Target: Z=20
+    latent_dims = [20]
+    # L=[2, 5]
     redundancy_factors = [2, 5]
     
     count = 0
     for z in latent_dims:
         for L in redundancy_factors:
             model_configs = [
-                # 1. Yang-Core: SMLVM Direct (GP Loss)
+                # 1. Yang: SMLVM Direct (GP Loss)
                 {'name': f'yang_direct_Z{z}_L{L}', 'inf': 'direct', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
                 
-                # 2. Yang-2025: SMLVM Amortized (GP Loss)
-                {'name': f'yang_amortized_mlp_Z{z}_L{L}', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
-                {'name': f'yang_amortized_cnn_Z{z}_L{L}', 'inf': 'amortized', 'enc': 'cnn', 'ecc': 'none', 'cur_L': 1, 'gp': True},
-
-                # 3. Standard VAE: Uncoded (MSE Loss)
-                {'name': f'vae_mlp_Z{z}_L{L}_uncoded', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': False},
-                
-                # 4. Standard Coded VAE: (MSE Loss + ECC)
+                # 2. Coded MLP VAE (Amortized, MSE Loss + ECC)
                 {'name': f'vae_mlp_Z{z}_L{L}_rep', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': False},
                 {'name': f'vae_mlp_Z{z}_L{L}_random', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': False},
                 
-                # 5. Our Semi-Amortized (GP Loss + ECC)
-                {'name': f'semi_mlp_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': True},
+                # 3. Semi-Amortized Random (GP Loss + ECC)
                 {'name': f'semi_mlp_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': True},
-                {'name': f'semi_cnn_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'repetition', 'cur_L': L, 'gp': True},
-                {'name': f'semi_cnn_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'cnn', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': True},
             ]
 
             for c in model_configs:
@@ -82,12 +74,16 @@ def generate_semi_caltech():
                 cfg['model']['encoder_type'] = c['enc']
                 cfg['training']['use_gp_loss'] = c['gp']
                 
-                filename = f"{output_dir}/{c['name']}.yaml"
+                filename = f"{output_root}/{c['name']}.yaml"
                 with open(filename, 'w') as f:
                     yaml.dump(cfg, f, default_flow_style=False)
                 count += 1
                 
-    print(f"Generated {count} configurations in {output_dir}.")
+    print(f"Generated {count} configurations in {output_root}.")
 
 if __name__ == "__main__":
-    generate_semi_caltech()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", type=str, default="configs/semi_caltech")
+    args = parser.parse_args()
+    generate_semi_caltech(args.output_dir)

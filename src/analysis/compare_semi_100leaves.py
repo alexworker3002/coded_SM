@@ -28,12 +28,13 @@ def cluster_acc(y_true, y_pred):
     return w[row_ind, col_ind].sum() / y_pred.size
 
 class Semi100LeavesComparator:
-    def __init__(self, device='cpu', results_dir="results/semi_100leaves"):
+    def __init__(self, checkpoint_dir, results_dir, device='cpu'):
         self.device = device
+        self.checkpoint_dir = checkpoint_dir
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         
-        print("Loading 100Leaves Data...")
+        print(f"Loading 100Leaves Data... [Checkpoints: {checkpoint_dir}]")
         self.dataset = get_dataset(dataset_name="100leaves")
         self.loader = DataLoader(self.dataset, batch_size=512, shuffle=False)
         self.num_data = len(self.dataset)
@@ -42,9 +43,12 @@ class Semi100LeavesComparator:
         self.num_classes = len(np.unique(self.labels))
 
     def load_model(self, exp_prefix, z, L):
-        candidates = sorted(glob.glob(f"checkpoints/100leaves/{exp_prefix}*"))
+        pattern = os.path.join(self.checkpoint_dir, f"{exp_prefix}*")
+        candidates = sorted(glob.glob(pattern))
+        
         if not candidates:
-            raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
+            # Fallback or error
+            raise ValueError(f"No checkpoint found for prefix {exp_prefix} in {self.checkpoint_dir}")
         
         actual_dir = candidates[-1]
         name_lower = exp_prefix.lower()
@@ -187,7 +191,13 @@ class Semi100LeavesComparator:
         plt.close()
 
 if __name__ == "__main__":
-    comp = Semi100LeavesComparator()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/100leaves", help="Path to checkpoints")
+    parser.add_argument("--results_dir", type=str, default="results/semi_100leaves", help="Path to save results")
+    args = parser.parse_args()
+    
+    comp = Semi100LeavesComparator(checkpoint_dir=args.checkpoint_dir, results_dir=args.results_dir)
     for z in [32, 64]:
         for L in [2, 5, 10]:
             comp.run_benchmark(z, L)

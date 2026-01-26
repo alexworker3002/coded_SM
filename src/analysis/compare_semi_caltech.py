@@ -28,12 +28,13 @@ def cluster_acc(y_true, y_pred):
     return w[row_ind, col_ind].sum() / y_pred.size
 
 class CaltechSemiComparator:
-    def __init__(self, device='cpu', results_dir="results/semi_caltech"):
+    def __init__(self, checkpoint_dir, results_dir, device='cpu'):
         self.device = device
+        self.checkpoint_dir = checkpoint_dir
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         
-        print("Loading Caltech101-7 Data...")
+        print(f"Loading Caltech101-7 Data... [Checkpoints: {checkpoint_dir}]")
         self.dataset = load_caltech_data()
         self.loader = DataLoader(self.dataset, batch_size=512, shuffle=False)
         self.num_data = len(self.dataset)
@@ -42,11 +43,12 @@ class CaltechSemiComparator:
         self.num_classes = len(np.unique(self.labels))
 
     def load_model(self, exp_prefix, z, L):
-        candidates = sorted(glob.glob(f"checkpoints/{exp_prefix}*"))
+        pattern = os.path.join(self.checkpoint_dir, f"{exp_prefix}*")
+        candidates = sorted(glob.glob(pattern))
+
         if not candidates:
-            candidates = sorted(glob.glob(f"{exp_prefix}*"))
-            if not candidates:
-                 raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
+            # Fallback for old structure if needed, or error
+            raise ValueError(f"No checkpoint found for prefix {exp_prefix} in {self.checkpoint_dir}")
         
         actual_dir = candidates[-1]
         name_lower = exp_prefix.lower()
@@ -65,7 +67,7 @@ class CaltechSemiComparator:
         else:
             inference_mode = 'direct'
             
-        encoder_type = 'cnn' if 'cnn' in name_lower else 'mlp'
+        encoder_type = 'mlp'
             
         model = CNG_MV_GPLVM(
             num_data=self.num_data,
@@ -80,6 +82,9 @@ class CaltechSemiComparator:
         ).to(self.device)
         
         model_path = os.path.join(actual_dir, "final_model.pth")
+        if not os.path.exists(model_path):
+             raise FileNotFoundError(f"Model file not found: {model_path}")
+
         state_dict = torch.load(model_path, map_location=self.device)
         model.load_state_dict(state_dict, strict=False)
         model.eval()
@@ -129,18 +134,12 @@ class CaltechSemiComparator:
 
     def run_benchmark(self, z, L):
         print(f"\n>>> Benchmarking Z={z}, L={L}")
-        # Models for this group
+        # Models for this group - Limited to requested
         models_map = {
             "Yang-Direct": f"yang_direct_Z{z}_L{L}",
-            "Yang-Amort-MLP": f"yang_amortized_mlp_Z{z}_L{L}",
-            "Yang-Amort-CNN": f"yang_amortized_cnn_Z{z}_L{L}",
-            "VAE-MLP-Uncoded": f"vae_mlp_Z{z}_L{L}_uncoded",
             "VAE-MLP-Rep": f"vae_mlp_Z{z}_L{L}_rep",
             "VAE-MLP-Rand": f"vae_mlp_Z{z}_L{L}_random",
-            "Semi-MLP-Rep": f"semi_mlp_Z{z}_L{L}_rep",
             "Semi-MLP-Rand": f"semi_mlp_Z{z}_L{L}_random",
-            "Semi-CNN-Rep": f"semi_cnn_Z{z}_L{L}_rep",
-            "Semi-CNN-Rand": f"semi_cnn_Z{z}_L{L}_random",
         }
         
         results = []
@@ -156,16 +155,20 @@ class CaltechSemiComparator:
                 shift = self.run_robustness_test(model, z_data)
                 
                 results.append({"Model": label, "NMI": nmi, "ACC": acc, "Latent Shift": shift})
-                print(f"✅ {label}: NMI={nmi:.4f}, Shift={shift:.4f}")
+                print(f"✅ {label}: NMI={nmi:.4f}, ACC={acc:.4f}, Shift={shift:.4f}")
             except Exception as e:
                 print(f"❌ Failed {label}: {e}")
+
+        if not results:
+             print(f"No results found for Z={z}, L={L}")
+             return
 
         df = pd.DataFrame(results)
         df.to_csv(os.path.join(self.results_dir, f"semi_caltech_Z{z}_L{L}.csv"), index=False)
         self.plot(df, z, L)
 
     def plot(self, df, z, L):
-        fig, ax1 = plt.subplots(figsize=(16, 8))
+        fig, ax1 = plt.subplots(figsize=(14, 7))
         sns.barplot(data=df, x="Model", y="NMI", ax=ax1, palette="viridis", alpha=0.7)
         ax1.set_ylabel("NMI", fontsize=14)
         ax1.set_ylim(0, 1.0)
@@ -181,7 +184,14 @@ class CaltechSemiComparator:
         plt.close()
 
 if __name__ == "__main__":
-    comp = CaltechSemiComparator()
-    for z in [20, 40]:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/caltech101-7", help="Path to checkpoints")
+    parser.add_argument("--results_dir", type=str, default="results/semi_caltech", help="Path to save results")
+    args = parser.parse_args()
+    
+    comp = CaltechSemiComparator(checkpoint_dir=args.checkpoint_dir, results_dir=args.results_dir)
+    # Execute for requested Z=20
+    for z in [20]:
         for L in [2, 5]:
             comp.run_benchmark(z, L)

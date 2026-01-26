@@ -16,6 +16,7 @@ checkpoints/
 *.pth
 *.log
 runs/
+experiments/
 
 # System
 .DS_Store
@@ -28,4 +29,3 @@ env/
 venv/
 
 .agent/
-

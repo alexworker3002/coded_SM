@@ -28,12 +28,13 @@ def cluster_acc(y_true, y_pred):
     return w[row_ind, col_ind].sum() / y_pred.size
 
 class SemiMfeatComparator:
-    def __init__(self, device='cpu', results_dir="results/semi_mfeat"):
+    def __init__(self, checkpoint_dir, results_dir, device='cpu'):
         self.device = device
+        self.checkpoint_dir = checkpoint_dir
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         
-        print("Loading Mfeat Data...")
+        print(f"Loading Mfeat Data... [Checkpoints: {checkpoint_dir}]")
         self.dataset = get_dataset(dataset_name="mfeat")
         self.loader = DataLoader(self.dataset, batch_size=512, shuffle=False)
         self.num_data = len(self.dataset)
@@ -42,9 +43,17 @@ class SemiMfeatComparator:
         self.num_classes = len(np.unique(self.labels))
 
     def load_model(self, exp_prefix, z, L):
-        candidates = sorted(glob.glob(f"checkpoints/mfeat/{exp_prefix}*"))
+        # Look directly in the provided checkpoint_dir
+        pattern = os.path.join(self.checkpoint_dir, f"{exp_prefix}*")
+        candidates = sorted(glob.glob(pattern))
         if not candidates:
-            raise ValueError(f"No checkpoint found for prefix {exp_prefix}")
+            # Try recursive search if not found in root (engine creates subfolders)
+            # Actually engine creates checkpoint_dir/{exp_name}_{timestamp}
+            # So pattern above matches that directory.
+            pass
+
+        if not candidates:
+            raise ValueError(f"No checkpoint found for prefix {exp_prefix} in {self.checkpoint_dir}")
         
         actual_dir = candidates[-1]
         name_lower = exp_prefix.lower()
@@ -187,7 +196,13 @@ class SemiMfeatComparator:
         plt.close()
 
 if __name__ == "__main__":
-    comp = SemiMfeatComparator()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/mfeat", help="Path to checkpoints")
+    parser.add_argument("--results_dir", type=str, default="results/semi_mfeat", help="Path to save results")
+    args = parser.parse_args()
+    
+    comp = SemiMfeatComparator(checkpoint_dir=args.checkpoint_dir, results_dir=args.results_dir)
     for z in [10, 20]:
         for L in [2, 5, 10]:
             comp.run_benchmark(z, L)

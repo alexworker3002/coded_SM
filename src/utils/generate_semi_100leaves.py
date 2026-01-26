@@ -10,7 +10,7 @@ BASE_CONFIG = {
         "dataset": "100leaves"
     },
     "latent_space": {
-        "info_dim": 32,
+        "info_dim": 64,
         "redundancy_factor": 2, 
         "ecc_type": "none"
     },
@@ -38,34 +38,26 @@ BASE_CONFIG = {
     }
 }
 
-def generate_semi_100leaves():
-    output_dir = "configs/semi_100leaves"
-    os.makedirs(output_dir, exist_ok=True)
+def generate_semi_100leaves(output_root="configs/semi_100leaves"):
+    os.makedirs(output_root, exist_ok=True)
     
-    # Z chosen for 100 classes
-    latent_dims = [32, 64]
-    # L with added 10 as requested
-    redundancy_factors = [2, 5, 10]
+    # Target: Z=64
+    latent_dims = [64]
+    # L=[2, 5]
+    redundancy_factors = [2, 5]
     
     count = 0
     for z in latent_dims:
         for L in redundancy_factors:
             model_configs = [
-                # 1. Yang-Core: SMLVM Direct (GP Loss)
+                # 1. Yang: SMLVM Direct (GP Loss)
                 {'name': f'yang_direct_Z{z}_L{L}', 'inf': 'direct', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
                 
-                # 2. Yang-2025: SMLVM Amortized (GP Loss) - MLP only
-                {'name': f'yang_amortized_mlp_Z{z}_L{L}', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': True},
-
-                # 3. Standard VAE: Uncoded (MSE Loss)
-                {'name': f'vae_mlp_Z{z}_L{L}_uncoded', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'none', 'cur_L': 1, 'gp': False},
-                
-                # 4. Standard Coded VAE: (MSE Loss + ECC)
+                # 2. Coded MLP VAE (Amortized, MSE Loss + ECC)
                 {'name': f'vae_mlp_Z{z}_L{L}_rep', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': False},
                 {'name': f'vae_mlp_Z{z}_L{L}_random', 'inf': 'amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': False},
                 
-                # 5. Our Semi-Amortized (GP Loss + ECC) - MLP only
-                {'name': f'semi_mlp_Z{z}_L{L}_rep', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'repetition', 'cur_L': L, 'gp': True},
+                # 3. Semi-Amortized Random (GP Loss + ECC)
                 {'name': f'semi_mlp_Z{z}_L{L}_random', 'inf': 'semi_amortized', 'enc': 'mlp', 'ecc': 'random_gaussian', 'cur_L': L, 'gp': True},
             ]
 
@@ -79,12 +71,16 @@ def generate_semi_100leaves():
                 cfg['model']['encoder_type'] = c['enc']
                 cfg['training']['use_gp_loss'] = c['gp']
                 
-                filename = f"{output_dir}/{c['name']}.yaml"
+                filename = f"{output_root}/{c['name']}.yaml"
                 with open(filename, 'w') as f:
                     yaml.dump(cfg, f, default_flow_style=False)
                 count += 1
                 
-    print(f"Generated {count} configurations in {output_dir}.")
+    print(f"Generated {count} configurations in {output_root}.")
 
 if __name__ == "__main__":
-    generate_semi_100leaves()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", type=str, default="configs/semi_100leaves")
+    args = parser.parse_args()
+    generate_semi_100leaves(args.output_dir)

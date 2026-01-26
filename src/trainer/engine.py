@@ -18,34 +18,45 @@ from src.utils.data_utils import get_dataset, load_mfeat_data
 from src.models.cng_model import CNG_MV_GPLVM
 
 class Trainer:
-    def __init__(self, config_path):
+    def __init__(self, config_path, checkpoint_dir=None, log_dir=None):
+        self.config_path = config_path
         # 1. Load Configuration
         with open(config_path, 'r') as f:
             self.cfg = yaml.safe_load(f)
         
         # Setup Device
         if self.cfg['experiment']['device'] == 'auto':
-            if torch.backends.mps.is_available():
-                self.device = torch.device('mps')
-                print(f"[Trainer] Using MPS (Apple Silicon) acceleration.")
-            elif torch.cuda.is_available():
+            if torch.cuda.is_available():
                 self.device = torch.device('cuda')
                 print(f"[Trainer] Using CUDA acceleration.")
+            elif torch.backends.mps.is_available():
+                self.device = torch.device('mps')
+                print(f"[Trainer] Using MPS (Apple Silicon) acceleration.")
             else:
                 self.device = torch.device('cpu')
                 print(f"[Trainer] Using CPU.")
         else:
             self.device = torch.device(self.cfg['experiment']['device'])
             
-        # Logging - Organized by Dataset
+        # Logging - Organized by Dataset or Override
         self.exp_name = self.cfg['experiment']['name']
         self.dataset_name = self.cfg['experiment'].get('dataset', 'unknown')
         current_time = datetime.now().strftime('%Y%b%d_%H-%M-%S')
-        log_dir = os.path.join('logs', self.dataset_name, f"{self.exp_name}_{current_time}")
-        self.writer = SummaryWriter(log_dir=log_dir)
-        self.ckpt_dir = os.path.join('checkpoints', self.dataset_name, f"{self.exp_name}_{current_time}")
+        
+        # Determine paths
+        if log_dir:
+             self.log_dir = os.path.join(log_dir, f"{self.exp_name}_{current_time}")
+        else:
+             self.log_dir = os.path.join('logs', self.dataset_name, f"{self.exp_name}_{current_time}")
+
+        if checkpoint_dir:
+            self.ckpt_dir = os.path.join(checkpoint_dir, f"{self.exp_name}_{current_time}")
+        else:
+            self.ckpt_dir = os.path.join('checkpoints', self.dataset_name, f"{self.exp_name}_{current_time}")
+
+        self.writer = SummaryWriter(log_dir=self.log_dir)
         os.makedirs(self.ckpt_dir, exist_ok=True)
-        print(f"[Trainer] Log Dir: {log_dir}")
+        print(f"[Trainer] Log Dir: {self.log_dir}")
         print(f"[Trainer] Ckpt Dir: {self.ckpt_dir}")
         
     def prepare_data(self):
@@ -215,7 +226,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/mfeat_default.yaml', help='Path to config file')
+    parser.add_argument("--checkpoint_dir", type=str, default=None, help="Override checkpoint directory")
+    parser.add_argument("--log_dir", type=str, default=None, help="Override log directory")
     args = parser.parse_args()
     
-    trainer = Trainer(args.config)
+    trainer = Trainer(args.config, checkpoint_dir=args.checkpoint_dir, log_dir=args.log_dir)
     trainer.fit()
