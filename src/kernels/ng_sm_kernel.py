@@ -74,8 +74,10 @@ class NextGenSpectralMixtureKernel(nn.Module):
         
         # omega2 (Conditional Bivariate Gaussian)
         # Using reference logic (std1 in noise term)
-        term_mean = mu2 + rho * (std2 / std1) * (omega1 - mu1)
-        term_noise = (1 - rho**2).sqrt() * std1 * eps2
+        # Clamp rho to prevent sqrt(negative) when computing std of conditional
+        rho_safe = rho.clamp(min=-0.99, max=0.99)
+        term_mean = mu2 + rho_safe * (std2 / std1) * (omega1 - mu1)
+        term_noise = (1 - rho_safe**2).sqrt() * std1 * eps2
         omega2 = term_mean + term_noise
 
         # 3. Compute inner products

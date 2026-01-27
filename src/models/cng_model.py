@@ -227,9 +227,10 @@ class CNG_MV_GPLVM(nn.Module):
                 y_sq_sum = y_true.pow(2).sum()
                 quad_term = (y_sq_sum - L_inv_Phi_Y.pow(2).sum()) / noise_var
                 
-                log_det_A = 2 * torch.log(torch.diag(L)).sum()
+                log_det_A = 2 * torch.log(torch.diag(L).clamp(min=1e-10)).sum()
                 # log|K| = log|Phi Phi^T + sigma^2 I| = log|Phi^T Phi + sigma^2 I| + (N-D)log(sigma^2)
-                log_det_K = log_det_A + (N - D) * torch.log(torch.tensor(noise_var))
+                # BUGFIX: noise_var is already a tensor, don't wrap it again
+                log_det_K = log_det_A + (N - D) * torch.log(noise_var.clamp(min=1e-10))
                 
                 nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
             else:
@@ -239,7 +240,7 @@ class CNG_MV_GPLVM(nn.Module):
                 L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
                 
                 quad_term = L_inv_Y.pow(2).sum()
-                log_det_K = 2 * torch.log(torch.diag(L)).sum()
+                log_det_K = 2 * torch.log(torch.diag(L).clamp(min=1e-10)).sum()
                 nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
                 
             return nll

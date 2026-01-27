@@ -77,6 +77,10 @@ class Trainer:
 
         self.writer = SummaryWriter(log_dir=self.log_dir)
         os.makedirs(self.ckpt_dir, exist_ok=True)
+        # Save config for reproducibility and automated analysis
+        with open(os.path.join(self.ckpt_dir, 'config.yaml'), 'w') as f:
+            yaml.dump(self.cfg, f)
+            
         print(f"[Trainer] Log Dir: {self.log_dir}")
         print(f"[Trainer] Ckpt Dir: {self.ckpt_dir}")
         
