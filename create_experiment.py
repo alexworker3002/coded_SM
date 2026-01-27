@@ -34,10 +34,10 @@ BASE_CONFIG = {
     },
     "training": {
         "batch_size": 128, 
-        "lr": 0.01,
+        "lr": 0.001,
         "epochs": 100, 
         "log_interval": 10,
-        "alignment_beta": 0.1,
+        "alignment_beta": 0.01,
         "use_gp_loss": True
     }
 }

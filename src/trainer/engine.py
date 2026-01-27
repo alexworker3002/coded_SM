@@ -215,6 +215,20 @@ class Trainer:
                     details['align_loss'] = align_loss.item()
                 
                 loss.backward()
+                
+                # NaN Guard: Check for parameter corruption
+                has_nan = False
+                for name, param in self.model.named_parameters():
+                    if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                        print(f"[CRITICAL] NaN/Inf gradient detected in {name}")
+                        has_nan = True
+                        break
+                
+                if has_nan:
+                    # Skip this batch to prevent corruption
+                    self.optimizer.zero_grad()
+                    continue
+                
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
             

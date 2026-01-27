@@ -122,8 +122,8 @@ class MultiViewEncoder(nn.Module):
                 
             # Encoding q(z|y_v)
             mu_v, logvar_v = self.encoders[key](x_v)
-            # Var > 1e-4 because precision can explode if var -> 0
-            logvar_v = logvar_v.clamp(min=-9.21) # exp(-9.21) approx 1e-4
+            # Tighter clamp: var in [1e-3, 10] to prevent both underflow and overflow
+            logvar_v = logvar_v.clamp(min=-6.91, max=2.3) # exp(-6.91)≈1e-3, exp(2.3)≈10
             var_v = torch.exp(logvar_v) + 1e-6
             
             T_v = 1.0 / var_v  # Precision          
