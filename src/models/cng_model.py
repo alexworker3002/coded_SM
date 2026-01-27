@@ -195,47 +195,54 @@ class CNG_MV_GPLVM(nn.Module):
         y_true: (N, Dy) - 观测数据
         noise_sigma: (Scalar) - 噪声标准差
         """
-        N, D = Phi.shape
-        Dy = y_true.shape[1]
-        noise_var = noise_sigma.pow(2).clamp(min=1e-6)
-        jitter = 1e-5
-        
-        if N > D:
-            # Woodbury Identity Case (Scalable)
-            # A = Phi^T Phi + sigma^2 I
-            A = Phi.t() @ Phi + (noise_var + jitter) * torch.eye(D, device=Phi.device)
-            try:
-                L = torch.linalg.cholesky(A)
-            except RuntimeError:
-                # Fallback: larger jitter
-                A = A + 1e-4 * torch.eye(D, device=Phi.device)
-                L = torch.linalg.cholesky(A)
+        # FORCE FP32 for numerical stability in Cholesky
+        # Even if autocast is enabled globally, this block runs in FP32
+        with torch.amp.autocast('cuda', enabled=False):
+            Phi = Phi.float()
+            y_true = y_true.float()
+            noise_sigma = noise_sigma.float()
             
-            # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
-            Phi_T_Y = Phi.t() @ y_true
-            L_inv_Phi_Y = torch.linalg.solve_triangular(L, Phi_T_Y, upper=False)
+            N, D = Phi.shape
+            Dy = y_true.shape[1]
+            noise_var = noise_sigma.pow(2).clamp(min=1e-6)
+            jitter = 1e-5
             
-            # neg_log_lik = 0.5 * [ (Y^T Y - ||L_inv_Phi_Y||^2) / noise_var + 2*log|L| + (N-D)*log(noise_var) + N*log(2pi) ]
-            # Note: We divide by N and Dy to keep scale stable for different datasets
-            y_sq_sum = y_true.pow(2).sum()
-            quad_term = (y_sq_sum - L_inv_Phi_Y.pow(2).sum()) / noise_var
-            
-            log_det_A = 2 * torch.log(torch.diag(L)).sum()
-            # log|K| = log|Phi Phi^T + sigma^2 I| = log|Phi^T Phi + sigma^2 I| + (N-D)log(sigma^2)
-            log_det_K = log_det_A + (N - D) * torch.log(torch.tensor(noise_var))
-            
-            nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
-        else:
-            # Direct Case (N <= D)
-            K = Phi @ Phi.t() + (noise_var + jitter) * torch.eye(N, device=Phi.device)
-            L = torch.linalg.cholesky(K)
-            L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
-            
-            quad_term = L_inv_Y.pow(2).sum()
-            log_det_K = 2 * torch.log(torch.diag(L)).sum()
-            nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
-            
-        return nll
+            if N > D:
+                # Woodbury Identity Case (Scalable)
+                # A = Phi^T Phi + sigma^2 I
+                A = Phi.t() @ Phi + (noise_var + jitter) * torch.eye(D, device=Phi.device)
+                try:
+                    L = torch.linalg.cholesky(A)
+                except RuntimeError:
+                    # Fallback: larger jitter
+                    A = A + 1e-4 * torch.eye(D, device=Phi.device)
+                    L = torch.linalg.cholesky(A)
+                
+                # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
+                Phi_T_Y = Phi.t() @ y_true
+                L_inv_Phi_Y = torch.linalg.solve_triangular(L, Phi_T_Y, upper=False)
+                
+                # neg_log_lik = 0.5 * [ (Y^T Y - ||L_inv_Phi_Y||^2) / noise_var + 2*log|L| + (N-D)*log(noise_var) + N*log(2pi) ]
+                # Note: We divide by N and Dy to keep scale stable for different datasets
+                y_sq_sum = y_true.pow(2).sum()
+                quad_term = (y_sq_sum - L_inv_Phi_Y.pow(2).sum()) / noise_var
+                
+                log_det_A = 2 * torch.log(torch.diag(L)).sum()
+                # log|K| = log|Phi Phi^T + sigma^2 I| = log|Phi^T Phi + sigma^2 I| + (N-D)log(sigma^2)
+                log_det_K = log_det_A + (N - D) * torch.log(torch.tensor(noise_var))
+                
+                nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+            else:
+                # Direct Case (N <= D)
+                K = Phi @ Phi.t() + (noise_var + jitter) * torch.eye(N, device=Phi.device)
+                L = torch.linalg.cholesky(K)
+                L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
+                
+                quad_term = L_inv_Y.pow(2).sum()
+                log_det_K = 2 * torch.log(torch.diag(L)).sum()
+                nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+                
+            return nll
 
     def compute_loss(self, views_batch, batch_indices, beta=1.0, use_gp_loss=True):
         """

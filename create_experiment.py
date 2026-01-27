@@ -150,9 +150,13 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     
     # Toggles
+    parser.add_argument("--use_amp", action="store_true", help="Enable Mixed Precision Training (May be unstable for GP)")
     parser.add_argument("--no_gp_loss", action="store_true", help="Disable GP Loss (use MSE)")
     
     args = parser.parse_args()
     args.gp_loss = not args.no_gp_loss
+
+    # Add to config
+    BASE_CONFIG['training']['use_amp'] = args.use_amp
     
     create_experiment(args)

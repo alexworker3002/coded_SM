@@ -13,10 +13,14 @@ import numpy as np
 from tqdm import tqdm
 from datetime import datetime
 try:
-    from torch.cuda.amp import autocast, GradScaler
+    from torch.amp import autocast, GradScaler
     AMP_AVAILABLE = True
 except ImportError:
-    AMP_AVAILABLE = False
+    try:
+        from torch.cuda.amp import autocast, GradScaler
+        AMP_AVAILABLE = True
+    except ImportError:
+        AMP_AVAILABLE = False
 
 # Import Modules
 from src.utils.data_utils import get_dataset, load_mfeat_data
@@ -192,6 +196,11 @@ class Trainer:
                         details['align_loss'] = align_loss.item()
                 
                 self.scaler.scale(loss).backward()
+                
+                # Unscale for Clipping
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
@@ -206,6 +215,7 @@ class Trainer:
                     details['align_loss'] = align_loss.item()
                 
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
             
             # Stats
