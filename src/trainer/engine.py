@@ -12,6 +12,11 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
+try:
+    from torch.cuda.amp import autocast, GradScaler
+    AMP_AVAILABLE = True
+except ImportError:
+    AMP_AVAILABLE = False
 
 # Import Modules
 from src.utils.data_utils import get_dataset, load_mfeat_data
@@ -38,6 +43,11 @@ class Trainer:
                 print(f"[Trainer] Using CPU.")
         else:
             self.device = torch.device(self.cfg['experiment']['device'])
+            
+        # Optimization: CUDNN Benchmark
+        if self.device.type == 'cuda':
+            torch.backends.cudnn.benchmark = True
+            print("[Trainer] Enabled CUDNN benchmark.")
             
         # Logging - Organized by Dataset or Override
         self.exp_name = self.cfg['experiment']['name']
@@ -84,13 +94,17 @@ class Trainer:
             else:
                  raise e
         
-        # DataLoader
+        # DataLoader Optimization
         self.batch_size = self.cfg['training']['batch_size']
+        num_workers = self.cfg['training'].get('num_workers', 4 if self.device.type == 'cuda' else 0)
+        pin_memory = True if self.device.type == 'cuda' else False
+        
         self.dataloader = DataLoader(
             self.dataset, 
             batch_size=self.batch_size, 
             shuffle=True, 
-            num_workers=0, # MPS 兼容性
+            num_workers=num_workers,
+            pin_memory=pin_memory,
             drop_last=False
         )
         
@@ -139,7 +153,12 @@ class Trainer:
         # Optimizer
         self.lr = self.cfg['training']['lr']
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        print(f"[Trainer] Model built on {self.device}.")
+        
+        # AMP Scaler
+        self.use_amp = self.cfg['training'].get('use_amp', True) and self.device.type == 'cuda' and AMP_AVAILABLE
+        self.scaler = GradScaler() if self.use_amp else None
+        
+        print(f"[Trainer] Model built on {self.device}. (AMP: {self.use_amp})")
 
     def train_epoch(self, epoch):
         self.model.train()
@@ -156,30 +175,38 @@ class Trainer:
             
             self.optimizer.zero_grad()
             
-            # Forward + Loss
+            # Forward + Loss with AMP
             use_gp_loss = self.cfg.get('training', {}).get('use_gp_loss', True)
-            loss, details = self.model.compute_loss(views_batch, indices, beta=1.0, use_gp_loss=use_gp_loss)
             
-            # --- Alignment Loss (Semi-Amortized) ---
-            if self.model.inference_mode == 'semi_amortized':
-                # outputs: y_recons, mu, log_sigma, mu_enc, view_features
-                outputs = self.model(indices, views_batch)
+            if self.use_amp:
+                with autocast():
+                    loss, details = self.model.compute_loss(views_batch, indices, beta=1.0, use_gp_loss=use_gp_loss)
+                    
+                    # --- Alignment Loss (Semi-Amortized) ---
+                    if self.model.inference_mode == 'semi_amortized':
+                        outputs = self.model(indices, views_batch)
+                        mu_opt, mu_enc = outputs[1], outputs[3]
+                        align_loss = torch.nn.functional.mse_loss(mu_enc, mu_opt.detach(), reduction='sum')
+                        align_beta = self.cfg.get('training', {}).get('alignment_beta', 0.1)
+                        loss = loss + align_beta * align_loss
+                        details['align_loss'] = align_loss.item()
                 
-                # Unpack (Match updated forward signature)
-                mu_opt = outputs[1]
-                mu_enc = outputs[3]
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss, details = self.model.compute_loss(views_batch, indices, beta=1.0, use_gp_loss=use_gp_loss)
                 
-                # Loss = ||mu_opt.detach() - mu_enc||^2 (Encoder chasing Opt)
-                align_loss = torch.nn.functional.mse_loss(mu_enc, mu_opt.detach(), reduction='sum')
+                if self.model.inference_mode == 'semi_amortized':
+                    outputs = self.model(indices, views_batch)
+                    mu_opt, mu_enc = outputs[1], outputs[3]
+                    align_loss = torch.nn.functional.mse_loss(mu_enc, mu_opt.detach(), reduction='sum')
+                    align_beta = self.cfg.get('training', {}).get('alignment_beta', 0.1)
+                    loss = loss + align_beta * align_loss
+                    details['align_loss'] = align_loss.item()
                 
-                # Weight
-                align_beta = self.cfg.get('training', {}).get('alignment_beta', 0.1)
-                
-                loss = loss + align_beta * align_loss
-                details['align_loss'] = align_loss.item()
-            
-            loss.backward()
-            self.optimizer.step()
+                loss.backward()
+                self.optimizer.step()
             
             # Stats
             batch_size = len(indices)
