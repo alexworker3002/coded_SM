@@ -1,111 +1,104 @@
-# src/kernels/ng_sm_kernel.py
 
 import torch
-import math
-import gpytorch
-from gpytorch.kernels import Kernel
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 
-class NextGenSpectralMixtureKernel(Kernel):
+class NextGenSpectralMixtureKernel(nn.Module):
     """
-    Next-Gen Spectral Mixture Kernel (NG-SM)
-    基于 Yang et al. (2025) 的实现。
-    使用双变量高斯混合模型拟合谱密度，并利用 RFF 进行近似。
+    Next-Gen Spectral Mixture (NG-SM) Kernel.
+    Aligned with Yang (2025) NG-MVLVM implementation.
+    
+    Key Features:
+    1. Bivariate Gaussian Spectral Density per mixture component (mu1, mu2, std1, std2, rho).
+    2. Dynamic RFF Sampling (resampled every forward pass).
+    3. Specific Feature Construction (Sum of Cosines/Sines).
     """
-    def __init__(self, num_dims, num_mixtures=4, rff_samples=500, **kwargs):
-        super().__init__(**kwargs)
-        self.num_dims = num_dims
-        self.num_mixtures = num_mixtures # Q
-        self.rff_samples = rff_samples   # S
+    def __init__(self, num_dims, num_mixtures=4, rff_samples=100):
+        super().__init__()
+        self.num_dims = num_dims # D (Input dim, e.g. x_dim)
+        self.num_mixtures = num_mixtures # M
+        self.rff_samples = rff_samples # S
         
-        # 1. 注册原始参数 (Raw Parameters)
-        # 我们让 GPyTorch 帮我们要处理约束 (Constraints)，比如方差必须大于0
-        self.register_parameter(
-            name="raw_mixture_weights", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures))
-        )
-        self.register_parameter(
-            name="raw_mixture_means", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures, self.num_dims))
-        )
-        self.register_parameter(
-            name="raw_mixture_scales", 
-            parameter=torch.nn.Parameter(torch.zeros(self.num_mixtures, self.num_dims))
-        )
+        # In reference, feature dim is M * (2 * S) 
+        self._feature_dim = self.num_mixtures * 2 * self.rff_samples
 
-        # 2. 注册约束 (Constraints)
-        # 权重和尺度必须为正，使用 Softplus 变换
-        self.register_constraint("raw_mixture_weights", gpytorch.constraints.Positive())
-        self.register_constraint("raw_mixture_scales", gpytorch.constraints.Positive())
+        # Parameters
+        # Weights (alpha): M x 1
+        self.raw_weights = nn.Parameter(torch.randn(num_mixtures, 1))
         
-        # RFF 采样所需的随机相位和频率权重 (固定不训练)
-        # 注意：这里我们先占位，实际 forward 时再根据设备生成或缓存
-        self.register_buffer("random_weights", torch.randn(self.num_mixtures, self.rff_samples, self.num_dims))
-        # REMOVED: self.register_buffer("random_biases", ...) - Using Cos/Sin concatenation instead
-
-    @property
-    def mixture_weights(self):
-        return self.raw_mixture_weights_constraint.transform(self.raw_mixture_weights)
-
-    @property
-    def mixture_scales(self):
-        return self.raw_mixture_scales_constraint.transform(self.raw_mixture_scales)
-
-    @property
-    def mixture_means(self):
-        return self.raw_mixture_means
-
-    def forward(self, x1, x2, diag=False, **params):
-        """
-        NG-SM 通常配合 RFF 使用，不直接计算 Gram 矩阵。
-        但在标准 GPyTorch 框架下，如果要兼容 exact inference，仍需提供 standard forward。
+        # Means (mu1, mu2): M x D
+        self.mu1 = nn.Parameter(torch.zeros(num_mixtures, num_dims))
+        self.mu2 = nn.Parameter(torch.zeros(num_mixtures, num_dims))
         
-        这里我们主要实现 RFF 特征映射逻辑供 VariationalStrategy 调用。
-        """
-        # 这是一个占位符，因为我们的核心是用 get_rff_feature
-        # 如果你只做变分推断 + RFF，这个 standard forward 其实不会被大规模调用
-        raise NotImplementedError("NG-SM Kernel intended for RFF use only in this project.")
-
-    def get_rff_feature(self, x):
-        """
-        计算随机傅里叶特征 Z(x)
-        x: [Batch, D]
-        Returns: [Batch, 2 * Q * S] (实部和虚部拼接)
-        """
-        # 1. 获取变换后的非负参数
-        w = self.mixture_weights  # [Q]
-        m = self.mixture_means    # [Q, D]
-        s = self.mixture_scales   # [Q, D]
+        # Log Stds (std1, std2): M x D
+        # Initialized to ones (log_std=0) as in reference loop (which makes softplus(1)~1.3)
+        # We start with 0 (softplus(0)~0.7) to keep it well behaved, or 1 to match exactly.
+        # Let's use 0.0 for stability.
+        self.log_std1 = nn.Parameter(torch.zeros(num_mixtures, num_dims)) 
+        self.log_std2 = nn.Parameter(torch.zeros(num_mixtures, num_dims))
         
-        # 2. 这里的数学逻辑需严格参考 NG-MVLVM 的 param_gp.py
-        # phi(x) = [ sqrt(w/S) * cos( (s * rand_n + m) * x ) , sqrt(w/S) * sin( (...) * x ) ]
-        # 注意维度的广播 (Broadcasting)
-        
-        # 扩展维度以进行广播
-        # x: [Batch, 1, 1, D]
-        x_expanded = x.unsqueeze(1).unsqueeze(1) 
-        
-        # random_weights: [Q, S, D]
-        # spectral_freqs ~ N(m, s^2) => s * rand_n + m
-        spectral_freqs = s.unsqueeze(1) * self.random_weights + m.unsqueeze(1) # [Q, S, D]
-        
-        # 计算内积: sum_d (freq_d * x_d)
-        # [Batch, Q, S]
-        inner_prod = torch.sum(spectral_freqs.unsqueeze(0) * x_expanded, dim=-1)
-        
-        # 计算特征
-        # scaling factor: sqrt(w / S)
-        # S is self.rff_samples
-        amplitude = torch.sqrt(w.view(1, -1, 1) / self.rff_samples)
-        
-        z_cos = amplitude * torch.cos(inner_prod)
-        z_sin = amplitude * torch.sin(inner_prod)
-        
-        # 拼接并展平: [Batch, 2 * Q * S]
-        # cat dim=-1 makes it [Batch, Q, 2*S] -> view -> [Batch, 2*Q*S]
-        feature = torch.cat([z_cos, z_sin], dim=-1).view(x.size(0), -1)
-        return feature
+        # Correlation (rho): M
+        self.rho = nn.Parameter(torch.zeros(num_mixtures))
 
     @property
     def feature_dim(self):
-        """Output feature dimension: 2 * Q * S."""
-        return 2 * self.num_mixtures * self.rff_samples
+        return self._feature_dim
+
+    def get_rff_feature(self, x):
+        """
+        Compute RFF features for input x.
+        x: (N, D)
+        """
+        # Parameters
+        weights = F.softplus(self.raw_weights) # M x 1
+        std1 = F.softplus(self.log_std1) # M x D
+        std2 = F.softplus(self.log_std2) # M x D
+        # rho is used directly.
+        
+        N = x.size(0)
+        phi_list = []
+        
+        # Loop over mixtures (as in reference) for Bivariate Sampling
+        for i in range(self.num_mixtures):
+            device = x.device
+            
+            eps1 = torch.randn(self.rff_samples, self.num_dims, device=device)
+            eps2 = torch.randn(self.rff_samples, self.num_dims, device=device)
+            
+            # Extract parameters for i-th mixture
+            m1_i = self.mu1[i] # D
+            m2_i = self.mu2[i] # D
+            s1_i = std1[i] # D
+            s2_i = std2[i] # D
+            rho_i = self.rho[i] # Scalar
+            
+            # Step 1: Sample omega1
+            omega1 = m1_i + s1_i * eps1 # S x D
+            
+            # Step 2: Sample omega2 (Conditional)
+            # REPLICATING REFERENCE LOGIC (including potential anomaly std1 usage in noise term)
+            # Reference:
+            # sampled_spectral_pt2 = mu2 + rho * (std2/std1) * (omega1 - mu1) + sqrt(1-rho^2) * std1 * eps2
+            
+            term_mean = m2_i + rho_i * (s2_i / s1_i) * (omega1 - m1_i)
+            # Using s1_i for noise term as in reference
+            term_noise = torch.sqrt(1 - rho_i ** 2) * s1_i * eps2 
+            
+            omega2 = term_mean + term_noise # S x D
+            
+            # 2. Compute Features
+            # x_spectral1 = 2pi * x @ omega1.T
+            x_spectral1 = (2 * np.pi) * x @ omega1.t() # N x S
+            x_spectral2 = (2 * np.pi) * x @ omega2.t() # N x S
+            
+            # Phi_i = sqrt(w / 4S) * [cos1+cos2, sin1+sin1]
+            scale = torch.sqrt(weights[i] / (4 * self.rff_samples))
+            
+            z_cos = x_spectral1.cos() + x_spectral2.cos()
+            z_sin = x_spectral1.sin() + x_spectral1.sin() # Reference logic
+            
+            phi_i = scale * torch.cat([z_cos, z_sin], dim=1) # N x 2S
+            phi_list.append(phi_i)
+            
+        return torch.cat(phi_list, dim=1) # N x (M * 2S)

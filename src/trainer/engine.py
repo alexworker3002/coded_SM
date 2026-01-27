@@ -18,8 +18,9 @@ from src.utils.data_utils import get_dataset, load_mfeat_data
 from src.models.cng_model import CNG_MV_GPLVM
 
 class Trainer:
-    def __init__(self, config_path, checkpoint_dir=None, log_dir=None):
+    def __init__(self, config_path, checkpoint_dir=None, log_dir=None, experiment_dir=None):
         self.config_path = config_path
+        self.experiment_dir = experiment_dir
         # 1. Load Configuration
         with open(config_path, 'r') as f:
             self.cfg = yaml.safe_load(f)
@@ -44,15 +45,21 @@ class Trainer:
         current_time = datetime.now().strftime('%Y%b%d_%H-%M-%S')
         
         # Determine paths
-        if log_dir:
-             self.log_dir = os.path.join(log_dir, f"{self.exp_name}_{current_time}")
+        if self.experiment_dir:
+            # New Workflow: Clean paths inside experiment_dir
+            self.log_dir = os.path.join(self.experiment_dir, 'logs')
+            self.ckpt_dir = os.path.join(self.experiment_dir, 'checkpoints')
         else:
-             self.log_dir = os.path.join('logs', self.dataset_name, f"{self.exp_name}_{current_time}")
+            # Legacy Workflow: Append timestamps
+            if log_dir:
+                 self.log_dir = os.path.join(log_dir, f"{self.exp_name}_{current_time}")
+            else:
+                 self.log_dir = os.path.join('logs', self.dataset_name, f"{self.exp_name}_{current_time}")
 
-        if checkpoint_dir:
-            self.ckpt_dir = os.path.join(checkpoint_dir, f"{self.exp_name}_{current_time}")
-        else:
-            self.ckpt_dir = os.path.join('checkpoints', self.dataset_name, f"{self.exp_name}_{current_time}")
+            if checkpoint_dir:
+                self.ckpt_dir = os.path.join(checkpoint_dir, f"{self.exp_name}_{current_time}")
+            else:
+                self.ckpt_dir = os.path.join('checkpoints', self.dataset_name, f"{self.exp_name}_{current_time}")
 
         self.writer = SummaryWriter(log_dir=self.log_dir)
         os.makedirs(self.ckpt_dir, exist_ok=True)
@@ -228,7 +235,8 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='configs/mfeat_default.yaml', help='Path to config file')
     parser.add_argument("--checkpoint_dir", type=str, default=None, help="Override checkpoint directory")
     parser.add_argument("--log_dir", type=str, default=None, help="Override log directory")
+    parser.add_argument("--experiment_dir", type=str, default=None, help="Root directory for the experiment (contains config, logs, checkpoints)")
     args = parser.parse_args()
     
-    trainer = Trainer(args.config, checkpoint_dir=args.checkpoint_dir, log_dir=args.log_dir)
+    trainer = Trainer(args.config, checkpoint_dir=args.checkpoint_dir, log_dir=args.log_dir, experiment_dir=args.experiment_dir)
     trainer.fit()
