@@ -197,14 +197,19 @@ class CNG_MV_GPLVM(nn.Module):
         """
         N, D = Phi.shape
         Dy = y_true.shape[1]
-        noise_var = noise_sigma ** 2
-        jitter = 1e-6
+        noise_var = noise_sigma.pow(2).clamp(min=1e-6)
+        jitter = 1e-5
         
         if N > D:
             # Woodbury Identity Case (Scalable)
             # A = Phi^T Phi + sigma^2 I
             A = Phi.t() @ Phi + (noise_var + jitter) * torch.eye(D, device=Phi.device)
-            L = torch.linalg.cholesky(A)
+            try:
+                L = torch.linalg.cholesky(A)
+            except RuntimeError:
+                # Fallback: larger jitter
+                A = A + 1e-4 * torch.eye(D, device=Phi.device)
+                L = torch.linalg.cholesky(A)
             
             # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
             Phi_T_Y = Phi.t() @ y_true

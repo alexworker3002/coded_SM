@@ -56,10 +56,10 @@ class NextGenSpectralMixtureKernel(nn.Module):
         S = self.rff_samples
         device = x.device
 
-        # 1. Transform Parameters
-        weights = F.softplus(self.raw_weights).view(M, 1, 1) # (M, 1, 1)
-        std1 = F.softplus(self.log_std1).view(M, 1, D)    # (M, 1, D)
-        std2 = F.softplus(self.log_std2).view(M, 1, D)    # (M, 1, D)
+        # 1. Transform Parameters with Numerical Clamp
+        weights = F.softplus(self.raw_weights).view(M, 1, 1).clamp(min=1e-6)
+        std1 = F.softplus(self.log_std1).view(M, 1, D).clamp(min=1e-6)
+        std2 = F.softplus(self.log_std2).view(M, 1, D).clamp(min=1e-6)
         mu1 = self.mu1.view(M, 1, D)                     # (M, 1, D)
         mu2 = self.mu2.view(M, 1, D)                     # (M, 1, D)
         rho = self.rho.view(M, 1, 1)                     # (M, 1, 1)

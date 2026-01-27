@@ -122,16 +122,17 @@ class MultiViewEncoder(nn.Module):
                 
             # Encoding q(z|y_v)
             mu_v, logvar_v = self.encoders[key](x_v)
-            var_v = torch.exp(logvar_v) + 1e-6 # Stability
-            T_v = 1.0 / var_v
+            # Var > 1e-4 because precision can explode if var -> 0
+            logvar_v = logvar_v.clamp(min=-9.21) # exp(-9.21) approx 1e-4
+            var_v = torch.exp(logvar_v) + 1e-6
             
+            T_v = 1.0 / var_v  # Precision          
             # Aggregate (Product of Experts)
             mu_T_joint = mu_T_joint + mu_v * T_v
             T_joint = T_joint + T_v
-            
-        # Compute joint posterior parameters
-        # Sigma = 1 / T
-        sigma_joint = 1.0 / T_joint
+                    # Joint Precision T = I + sum(T_v) (prior is N(0, I) -> precision I)
+        # Add small jitter to inversion for stability
+        sigma_joint = 1.0 / (T_joint + 1e-6)
         mu_joint = mu_T_joint * sigma_joint
         
         # Return mu and log_sigma
