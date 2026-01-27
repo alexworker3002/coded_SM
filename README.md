@@ -31,7 +31,18 @@ cd experiments/2026Jan27_..._semi_mfeat_Z32_L10
 bash run.sh
 ```
 
-### 3. Folder Structure
+### 3. Analyze Results
+Use `analyze_experiment.py` to calculate metrics and generate t-SNE plots for one or more experiments.
+
+```bash
+# Analyze a specific experiment
+python analyze_experiment.py experiments/2026Jan27_..._my_exp --tsne
+
+# Batch analyze all 100Leaves runs
+python analyze_experiment.py experiments/*100leaves*
+```
+
+### 4. Folder Structure
 Each experiment is self-contained:
 - `config.yaml`: Full hyperparameter set.
 - `run.sh`: Automated execution script (handles PYTHONPATH and env vars).
