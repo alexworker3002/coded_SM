@@ -65,6 +65,19 @@ class CNG_MV_GPLVM(nn.Module):
             # 2. Encoder (to be aligned)
             from src.models.components.encoder import MultiViewEncoder
             self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+        
+        elif self.inference_mode == 'coded_amortized':
+            print(f"[Model] Using CODED-Amortized Inference (Encoder -> X -> Decoder -> Z)")
+            from src.models.components.encoder import MultiViewEncoder
+            from src.modules.ecc_decoder import LinearECCDecoder
+            
+            # Encoder predicts High-Dim X (L * Z)
+            self.x_dim_coded = input_dim * redundancy_factor
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type)
+            
+            # Decoder projects X -> Z
+            self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
+            
         else:
             raise ValueError(f"Unknown inference mode: {inference_mode}")
         
@@ -148,6 +161,18 @@ class CNG_MV_GPLVM(nn.Module):
                 mu_enc, log_sigma_enc = self.encoder(views_batch)
                 
             return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
+            
+        elif self.inference_mode == 'coded_amortized':
+            if views_batch is None:
+                raise ValueError("Coded Amortized mode requires views_batch")
+            
+            # 1. Prediction: Y -> q(X)
+            mu_x, logvar_x = self.encoder(views_batch)
+            
+            # 2. Decoding: q(X) -> q(Z)
+            mu_z, logvar_z = self.ecc_decoder(mu_x, logvar_x)
+            
+            return mu_z, logvar_z
 
     def forward(self, batch_indices=None, views_batch=None):
         """
@@ -168,7 +193,14 @@ class CNG_MV_GPLVM(nn.Module):
             z_sample = self.reparameterize(batch_mu, batch_log_sigma)
             mu_enc = None # Placeholder
         
+            z_sample = self.reparameterize(batch_mu, batch_log_sigma)
+            mu_enc = None # Placeholder
+        
         # 2. ECC 编码: Z -> X
+        # 注意: 对于 coded_amortized，我们已经“解码”到了 Z，现在重新编码回 X 供 Kernel 使用
+        # 这确保了 Kernel 始终在高维冗余空间如果 use_ecc=True
+        # 如果 coded_amortized 且 use_ecc=True，流向是 Y->X_noisy->Z_clean->X_clean->Kernel
+        # 这样利用了 ECC 的去噪能力
         x_sample = self.ecc_module(z_sample)
         
         # 3. Multi-View Mapping (RFF Features for GP Loss)

@@ -138,10 +138,12 @@ if __name__ == "__main__":
     # Config Params
     parser.add_argument("--dataset", type=str, default="100leaves", choices=['100leaves', 'caltech101-7', 'mfeat'])
     parser.add_argument("--z_dim", type=int, default=32)
-    parser.add_argument("--redundancy", type=int, default=1)
+    parser.add_argument("--redundancy", type=int, default=1, help="ECC Redundancy Factor L")
     parser.add_argument("--ecc_type", type=str, default="none", choices=['none', 'repetition', 'random_gaussian'])
     
-    parser.add_argument("--inference", type=str, default="direct", choices=['direct', 'amortized', 'semi_amortized'])
+    parser.add_argument("--inference", type=str, default="semi_amortized", 
+                       choices=['direct', 'amortized', 'semi_amortized', 'coded_amortized'],
+                       help="Inference mode")
     parser.add_argument("--encoder", type=str, default="mlp", choices=['mlp', 'cnn'])
     
     parser.add_argument("--epochs", type=int, default=100)
