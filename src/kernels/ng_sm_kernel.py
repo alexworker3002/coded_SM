@@ -93,7 +93,7 @@ class NextGenSpectralMixtureKernel(nn.Module):
         # cos part: (M, N, S)
         z_cos = scale * (x_spectral1.cos() + x_spectral2.cos())
         # sin part: (M, N, S) - Reference logic uses 2*sin1
-        z_sin = scale * (x_spectral1.sin() + x_spectral1.sin())
+        z_sin = scale * (x_spectral1.sin() + x_spectral2.sin())
 
         # Combine into (M, N, 2S)
         phi_mixtures = torch.cat([z_cos, z_sin], dim=-1)

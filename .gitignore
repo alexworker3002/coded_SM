@@ -29,3 +29,4 @@ env/
 venv/
 
 .agent/
+docs/
