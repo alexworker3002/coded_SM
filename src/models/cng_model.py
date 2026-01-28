@@ -78,6 +78,24 @@ class CNG_MV_GPLVM(nn.Module):
             # Decoder projects X -> Z
             self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
             
+        elif self.inference_mode == 'coded_semi_amortized':
+            print(f"[Model] Using CODED-SEMI-Amortized Inference")
+            print(f"        (Direct Z_opt + [Encoder -> X -> Decoder -> Z_enc])")
+            
+            # 1. Direct Parameters (for Z_opt, Low Dim)
+            self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
+            self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+            
+            # 2. Coded Encoder Components
+            from src.models.components.encoder import MultiViewEncoder
+            from src.modules.ecc_decoder import LinearECCDecoder
+            
+            # Encoder predicts High-Dim X
+            self.x_dim_coded = input_dim * redundancy_factor
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type)
+            # Decoder projects X -> Z
+            self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
+
         else:
             raise ValueError(f"Unknown inference mode: {inference_mode}")
         
@@ -173,6 +191,22 @@ class CNG_MV_GPLVM(nn.Module):
             mu_z, logvar_z = self.ecc_decoder(mu_x, logvar_x)
             
             return mu_z, logvar_z
+            
+        elif self.inference_mode == 'coded_semi_amortized':
+            # 1. Direct Part (Z_opt)
+            if batch_indices is None:
+                mu_opt, log_var_opt = self.q_mu, self.q_log_sigma
+            else:
+                mu_opt, log_var_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+
+            # 2. Coded Encoder Part (Y -> X -> Z_enc)
+            if views_batch is None:
+                mu_enc, log_sigma_enc = None, None
+            else:
+                mu_x, logvar_x = self.encoder(views_batch)
+                mu_enc, log_sigma_enc = self.ecc_decoder(mu_x, logvar_x)
+                
+            return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
 
     def forward(self, batch_indices=None, views_batch=None):
         """
@@ -181,7 +215,10 @@ class CNG_MV_GPLVM(nn.Module):
         # 1. 采样 Z
         latents = self.get_latents(batch_indices, views_batch)
         
-        if self.inference_mode == 'semi_amortized':
+        # 1. 采样 Z
+        latents = self.get_latents(batch_indices, views_batch)
+        
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             (mu_opt, log_sigma_opt), (mu_enc, _) = latents
             # For reconstruction, we use Z_opt (Direct Optimization)
             z_sample = self.reparameterize(mu_opt, log_sigma_opt)
@@ -215,7 +252,10 @@ class CNG_MV_GPLVM(nn.Module):
             # Readout: Phi_v -> Y_hat_v (For standard VAE loss or prediction)
             y_recons[name] = self.readouts[name](features)
         
-        if self.inference_mode == 'semi_amortized':
+            # Readout: Phi_v -> Y_hat_v (For standard VAE loss or prediction)
+            y_recons[name] = self.readouts[name](features)
+        
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             return y_recons, batch_mu, batch_log_sigma, mu_enc, view_features
             
         return y_recons, batch_mu, batch_log_sigma, view_features
@@ -285,7 +325,7 @@ class CNG_MV_GPLVM(nn.Module):
         # Pass views_batch to forward for Amortized Inference support
         outputs = self.forward(batch_indices, views_batch)
         
-        if self.inference_mode == 'semi_amortized':
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             y_recons, mu, log_sigma, mu_enc, view_features = outputs
         else:
             y_recons, mu, log_sigma, view_features = outputs

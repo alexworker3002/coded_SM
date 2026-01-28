@@ -142,7 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--ecc_type", type=str, default="none", choices=['none', 'repetition', 'random_gaussian'])
     
     parser.add_argument("--inference", type=str, default="semi_amortized", 
-                       choices=['direct', 'amortized', 'semi_amortized', 'coded_amortized'],
+                       choices=['direct', 'amortized', 'semi_amortized', 'coded_amortized', 'coded_semi_amortized'],
                        help="Inference mode")
     parser.add_argument("--encoder", type=str, default="mlp", choices=['mlp', 'cnn'])
     
