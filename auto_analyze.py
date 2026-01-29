@@ -181,46 +181,43 @@ def generate_visualizations(df, output_dir):
     df['display_name'] = df.apply(clean_label, axis=1)
     z_dims = sorted(df['latent_dim'].unique())
     
-    # 1. Performance Matrix: ACC (Bars) + NMI (Line/Points)
+    # 1. Performance Matrix: ACC (Bars) + NMI (Line/Points) -> Per Z-Dimension
     # ---------------------------------------------------
-    plt.figure(figsize=(12, 6))
-    ax1 = plt.gca()
-    ax2 = ax1.twinx()
-    
-    # Colors for different latent dimensions
-    colors = plt.cm.viridis(np.linspace(0, 0.8, len(z_dims)))
-    
-    x_labels = df[df['latent_dim'] == z_dims[0]]['display_name'].tolist()
-    x = np.arange(len(x_labels))
-    width = 0.8 / len(z_dims)
-    
-    for i, z in enumerate(z_dims):
+    for z in z_dims:
         subset = df[df['latent_dim'] == z].copy()
-        # Sort by display order to match x_labels
-        subset['sort_idx'] = subset['display_name'].apply(lambda d: x_labels.index(d) if d in x_labels else 99)
-        subset = subset.sort_values('sort_idx')
+        # Sort by architecture and mode for consistent plotting
+        subset = subset.sort_values(['encoder', 'mode', 'redundancy', 'ecc_type'])
         
-        offset = (i - (len(z_dims)-1)/2) * width
+        plt.figure(figsize=(14, 6))
+        ax1 = plt.gca()
+        ax2 = ax1.twinx()
+        
+        x_labels = subset['display_name'].tolist()
+        x = np.arange(len(x_labels))
+        width = 0.5
         
         # ACC as Bars
-        ax1.bar(x + offset, subset['acc'], width=width, color=colors[i], alpha=0.6, label=f'ACC (Z={z})')
+        bars = ax1.bar(x, subset['acc'], width=width, color='skyblue', alpha=0.7, label='Accuracy')
         # NMI as dots with line
-        ax2.plot(x + offset, subset['nmi'], 'o-', color=colors[i], markersize=6, linewidth=1.5, label=f'NMI (Z={z})')
+        ax2.plot(x, subset['nmi'], 'o-', color='orange', markersize=8, linewidth=2, label='NMI')
 
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(x_labels, rotation=45)
-    ax1.set_ylabel('Accuracy (ACC)', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('NMI Score', fontsize=12, fontweight='bold')
-    ax1.set_title('Model Performance: Accuracy vs NMI', fontsize=14, fontweight='bold', pad=20)
-    
-    # Combine legends
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=len(z_dims), frameon=True)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(fig_dir, "performance_matrix.png"), bbox_inches='tight')
-    plt.close()
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(x_labels, rotation=45, ha='right')
+        ax1.set_ylabel('Accuracy (ACC)', fontsize=12, fontweight='bold', color='blue')
+        ax2.set_ylabel('NMI Score', fontsize=12, fontweight='bold', color='orange')
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax2.tick_params(axis='y', labelcolor='orange')
+        
+        ax1.set_title(f'Model Performance (Z={z}): Accuracy vs NMI', fontsize=14, fontweight='bold', pad=20)
+        
+        # Value tags
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.01, f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, f"performance_matrix_z{z}.png"), bbox_inches='tight')
+        plt.close()
 
     # 2. Stability Trade-off: ACC (Bars) vs Latent Shift (Line)
     # ---------------------------------------------------------

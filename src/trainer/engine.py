@@ -90,8 +90,11 @@ class Trainer:
         dataset_name = self.cfg['experiment'].get('dataset', 'mfeat')
         print(f"[Trainer] Loading {dataset_name}...")
         
+        # Extract dataset-specific kwargs if present
+        dataset_kwargs = self.cfg.get('dataset_kwargs', {})
+        
         try:
-            self.dataset = get_dataset(dataset_name)
+            self.dataset = get_dataset(dataset_name, **dataset_kwargs)
         except Exception as e:
             print(f"[Trainer] Error loading dataset {dataset_name}: {e}")
             if dataset_name == 'mfeat': # Specific fallback for mfeat download
@@ -143,6 +146,9 @@ class Trainer:
             
         # Get ECC Mode
         ecc_mode = feature_cfg.get('ecc_type', 'repetition')
+        
+        # Extract view_shapes for image-based datasets (optional)
+        view_shapes = self.cfg.get('views_shapes', None)
             
         self.model = CNG_MV_GPLVM(
             num_data=self.num_data,
@@ -155,7 +161,8 @@ class Trainer:
             ecc_matrix_path=None,
             inference_mode=inference_mode,
             ecc_mode=ecc_mode,
-            encoder_type=encoder_type 
+            encoder_type=encoder_type,
+            view_shapes=view_shapes
         ).to(self.device)
         
         # Optimizer
@@ -187,7 +194,7 @@ class Trainer:
             use_gp_loss = self.cfg.get('training', {}).get('use_gp_loss', True)
             
             if self.use_amp:
-                with autocast():
+                with autocast(device_type='cuda'):
                     loss, details = self.model.compute_loss(views_batch, indices, beta=1.0, use_gp_loss=use_gp_loss)
                     
                     # --- Alignment Loss (Semi-Amortized) ---

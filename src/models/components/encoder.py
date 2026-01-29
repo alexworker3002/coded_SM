@@ -7,10 +7,20 @@ class SingleViewEncoder(nn.Module):
     Encoder for a single view.
     Maps input view y_v to mu_v and log_sigma_v.
     """
-    def __init__(self, input_dim, latent_dim, hidden_dims=[256, 128], arch_type='mlp'):
+    def __init__(self, input_dim, latent_dim, hidden_dims=[256, 128], arch_type='mlp', input_shape=None):
+        """
+        Args:
+            input_dim: For vector inputs, this is the feature dimension.
+                      For image inputs (cnn2d), this should be the total flattened size (C*H*W).
+            latent_dim: Dimension of the latent code.
+            hidden_dims: Hidden layer dimensions for MLP.
+            arch_type: 'mlp', 'cnn' (1D), or 'cnn2d' (2D for images).
+            input_shape: Tuple (C, H, W) for 'cnn2d' architecture. Auto-inferred if possible.
+        """
         super().__init__()
         self.input_dim = input_dim
         self.arch_type = arch_type
+        self.input_shape = input_shape
         
         if self.arch_type == 'mlp':
             layers = []
@@ -40,6 +50,44 @@ class SingleViewEncoder(nn.Module):
                 self.cnn_out_dim = out.view(1, -1).shape[1]
             curr_dim = self.cnn_out_dim
             
+        elif self.arch_type == 'cnn2d':
+            # 2D CNN for image inputs (C, H, W) - 4 Layer Architecture
+            if input_shape is None:
+                raise ValueError("input_shape (C, H, W) must be provided for cnn2d architecture")
+            
+            C, H, W = input_shape
+            self.cnn2d = nn.Sequential(
+                # Layer 1: 3 -> 32
+                nn.Conv2d(C, 32, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                
+                # Layer 2: 32 -> 64
+                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                
+                # Layer 3: 64 -> 128
+                nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                
+                # Layer 4: 128 -> 256
+                nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(256),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((4, 4))  # Fixed spatial size -> (B, 256, 4, 4)
+            )
+            # Calculate output dim
+            with torch.no_grad():
+                dummy = torch.randn(1, C, H, W)
+                out = self.cnn2d(dummy)
+                self.cnn2d_out_dim = out.view(1, -1).shape[1]
+            curr_dim = self.cnn2d_out_dim
+            
         else:
             raise ValueError(f"Unknown arch_type: {arch_type}")
             
@@ -47,11 +95,35 @@ class SingleViewEncoder(nn.Module):
         self.fc_logvar = nn.Linear(curr_dim, latent_dim)
 
     def forward(self, x):
+        """
+        Args:
+            x: Input tensor.
+               - For MLP/CNN1D: (B, D) vector
+               - For CNN2D: (B, C, H, W) image tensor
+        """
         if self.arch_type == 'mlp':
+            # Expect (B, D)
+            if x.dim() > 2:
+                # If accidentally received image, flatten it
+                x = x.view(x.size(0), -1)
             h = self.trunk(x)
+            
         elif self.arch_type == 'cnn':
-            x_in = x.unsqueeze(1) # B, 1, D
+            # Expect (B, D), convert to (B, 1, D)
+            if x.dim() == 2:
+                x_in = x.unsqueeze(1)
+            else:
+                x_in = x
             h = self.cnn(x_in)
+            h = h.view(h.size(0), -1)
+            
+        elif self.arch_type == 'cnn2d':
+            # Expect (B, C, H, W)
+            if x.dim() == 2:
+                # Reshape flattened input back to image
+                C, H, W = self.input_shape
+                x = x.view(x.size(0), C, H, W)
+            h = self.cnn2d(x)
             h = h.view(h.size(0), -1)
             
         mu = self.fc_mu(h)
@@ -69,26 +141,32 @@ class MultiViewEncoder(nn.Module):
        
     This handles variable number of views naturally and is more robust.
     """
-    def __init__(self, view_dims, latent_dim, hidden_dims=[256, 128], arch_type='mlp'):
+    def __init__(self, view_dims, latent_dim, hidden_dims=[256, 128], arch_type='mlp', view_shapes=None):
         """
         Args:
             view_dims (dict): {view_index/name: input_dim}
+                             For vector views: input_dim is the feature count
+                             For image views: input_dim is C*H*W (flattened size)
             latent_dim (int): Dimension of z
+            view_shapes (dict, optional): {view_name: (C, H, W)} for image views using cnn2d
         """
         super().__init__()
         self.view_dims = view_dims
         self.latent_dim = latent_dim
+        self.view_shapes = view_shapes or {}
         
         # Create an encoder for each view
         self.encoders = nn.ModuleDict()
         for v_name, v_dim in view_dims.items():
             # Convert key to string for ModuleDict
             key = str(v_name)
+            input_shape = self.view_shapes.get(v_name, None)
             self.encoders[key] = SingleViewEncoder(
                 input_dim=v_dim,
                 latent_dim=latent_dim,
                 hidden_dims=hidden_dims,
-                arch_type=arch_type
+                arch_type=arch_type,
+                input_shape=input_shape
             )
             
     def forward(self, views_dict):

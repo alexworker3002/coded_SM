@@ -77,5 +77,10 @@ def get_dataset(dataset_name, data_dir=None, **kwargs):
         dir_path = data_dir if data_dir else "./data/100leaves"
         return load_100leaves_data(data_dir=dir_path, **kwargs)
     
+    elif "aloi" in dataset_name_lower:
+        from src.utils.data_aloi import load_aloi_data
+        dir_path = data_dir if data_dir else "./data/aloi"
+        return load_aloi_data(data_dir=dir_path, **kwargs)
+    
     else:
         raise ValueError(f"Unknown dataset name: {dataset_name}")

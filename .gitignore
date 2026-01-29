@@ -30,3 +30,6 @@ venv/
 
 .agent/
 docs/
+# ALOI Dataset (large image dataset, ~2.9GB)
+data/aloi/*.tar
+data/aloi/raw/

@@ -33,7 +33,8 @@ class CNG_MV_GPLVM(nn.Module):
                  ecc_matrix_path=None, # 预定义的 ECC 矩阵路径
                  inference_mode='direct', # 'direct' (GPLVM) or 'amortized' (VAE)
                  ecc_mode='repetition', # 'repetition' or 'random_gaussian'
-                 encoder_type='mlp' # 'mlp' or 'cnn'
+                 encoder_type='mlp', # 'mlp', 'cnn', or 'cnn2d'
+                 view_shapes=None # Dict[str, tuple]: {view_name: (C, H, W)} for image views
                  ):
         super().__init__()
         
@@ -45,6 +46,7 @@ class CNG_MV_GPLVM(nn.Module):
         self.inference_mode = inference_mode
         self.ecc_mode = ecc_mode
         self.encoder_type = encoder_type
+        self.view_shapes = view_shapes or {}
         
         # =========================================================
         # 1. Variational Inference Strategy
@@ -56,7 +58,7 @@ class CNG_MV_GPLVM(nn.Module):
         elif self.inference_mode == 'amortized':
             print(f"[Model] Using Amortized Inference (Deep Encoder: {encoder_type})")
             from src.models.components.encoder import MultiViewEncoder
-            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type, view_shapes=self.view_shapes)
         elif self.inference_mode == 'semi_amortized':
             print(f"[Model] Using SEMI-Amortized Inference (Direct + Encoder: {encoder_type})")
             # 1. Direct Parameters (for Z_opt)
@@ -64,7 +66,7 @@ class CNG_MV_GPLVM(nn.Module):
             self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
             # 2. Encoder (to be aligned)
             from src.models.components.encoder import MultiViewEncoder
-            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type, view_shapes=self.view_shapes)
         
         elif self.inference_mode == 'coded_amortized':
             print(f"[Model] Using CODED-Amortized Inference (Encoder -> X -> Decoder -> Z)")
@@ -73,7 +75,7 @@ class CNG_MV_GPLVM(nn.Module):
             
             # Encoder predicts High-Dim X (L * Z)
             self.x_dim_coded = input_dim * redundancy_factor
-            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type)
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
             
             # Decoder projects X -> Z
             self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
@@ -92,7 +94,7 @@ class CNG_MV_GPLVM(nn.Module):
             
             # Encoder predicts High-Dim X
             self.x_dim_coded = input_dim * redundancy_factor
-            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type)
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
             # Decoder projects X -> Z
             self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
 
@@ -271,8 +273,14 @@ class CNG_MV_GPLVM(nn.Module):
         # Even if autocast is enabled globally, this block runs in FP32
         with torch.amp.autocast('cuda', enabled=False):
             Phi = Phi.float()
-            y_true = y_true.float()
+            y_true_orig = y_true.float()
             noise_sigma = noise_sigma.float()
+            
+            # Flatten y_true if it's an image: (N, C, H, W) -> (N, C*H*W)
+            if y_true_orig.dim() > 2:
+                y_true = y_true_orig.view(y_true_orig.size(0), -1)
+            else:
+                y_true = y_true_orig
             
             N, D = Phi.shape
             Dy = y_true.shape[1]
