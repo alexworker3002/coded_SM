@@ -148,7 +148,16 @@ class Trainer:
         ecc_mode = feature_cfg.get('ecc_type', 'repetition')
         
         # Extract view_shapes for image-based datasets (optional)
-        view_shapes = self.cfg.get('views_shapes', None)
+        # Check both singular and plural to prevent configuration mismatch
+        view_shapes = self.cfg.get('view_shapes', self.cfg.get('views_shapes', None))
+        
+        # Decide whether to use heavy readout layers (save memory for high-dim inputs)
+        use_readouts = True
+        if view_shapes is not None or any(v.get('input_dim', 0) > 10000 for v in self.view_dims.values()):
+             # Image inputs (usually >10k dims) are too large for Linear Readouts (8k -> 82k params)
+             # Force disable readouts to save ~10GB VRAM per process
+             use_readouts = False
+             print(f"[Trainer] High-dimensional view detected. Disabling Readout layers (VRAM Optimized).")
             
         self.model = CNG_MV_GPLVM(
             num_data=self.num_data,
@@ -162,7 +171,8 @@ class Trainer:
             inference_mode=inference_mode,
             ecc_mode=ecc_mode,
             encoder_type=encoder_type,
-            view_shapes=view_shapes
+            view_shapes=view_shapes,
+            use_readouts=use_readouts
         ).to(self.device)
         
         # Optimizer

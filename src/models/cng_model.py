@@ -30,11 +30,12 @@ class CNG_MV_GPLVM(nn.Module):
                  num_mixtures=4,  # Q: 核函数混合成分数
                  rff_samples=100, # S: RFF 采样数
                  z_init_std=0.01, # q(z) 初始标准差
-                 ecc_matrix_path=None, # 预定义的 ECC 矩阵路径
+                 ecc_matrix_path=None, # 预定义的 ECC 矩阵路径 (Restored)
                  inference_mode='direct', # 'direct' (GPLVM) or 'amortized' (VAE)
                  ecc_mode='repetition', # 'repetition' or 'random_gaussian'
                  encoder_type='mlp', # 'mlp', 'cnn', or 'cnn2d'
-                 view_shapes=None # Dict[str, tuple]: {view_name: (C, H, W)} for image views
+                 view_shapes=None, # Dict[str, tuple]: {view_name: (C, H, W)} for image views
+                 use_readouts=True # Whether to instantiate mapping layers (Linear(8k, Dy))
                  ):
         super().__init__()
         
@@ -136,8 +137,12 @@ class CNG_MV_GPLVM(nn.Module):
                 num_mixtures=num_mixtures, 
                 rff_samples=rff_samples
             )
-            # Readout (use kernel's feature_dim property)
-            self.readouts[name] = nn.Linear(self.kernels[name].feature_dim, v_dim, bias=True)
+            # Readout (Optional: save memory for high-dim images)
+            if use_readouts:
+                self.readouts[name] = nn.Linear(self.kernels[name].feature_dim, v_dim, bias=True)
+            else:
+                self.readouts[name] = None
+                
             # Noise (init log(-2) ~ 0.135)
             self.log_noise_sigmas[name] = nn.Parameter(torch.tensor(-2.0))
 
@@ -210,13 +215,10 @@ class CNG_MV_GPLVM(nn.Module):
                 
             return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
 
-    def forward(self, batch_indices=None, views_batch=None):
+    def forward(self, batch_indices=None, views_batch=None, compute_reconstructions=True):
         """
         前向传播
         """
-        # 1. 采样 Z
-        latents = self.get_latents(batch_indices, views_batch)
-        
         # 1. 采样 Z
         latents = self.get_latents(batch_indices, views_batch)
         
@@ -229,9 +231,6 @@ class CNG_MV_GPLVM(nn.Module):
             batch_log_sigma = log_sigma_opt
         else:
             batch_mu, batch_log_sigma = latents
-            z_sample = self.reparameterize(batch_mu, batch_log_sigma)
-            mu_enc = None # Placeholder
-        
             z_sample = self.reparameterize(batch_mu, batch_log_sigma)
             mu_enc = None # Placeholder
         
@@ -251,11 +250,12 @@ class CNG_MV_GPLVM(nn.Module):
             features = self.kernels[name].get_rff_feature(x_sample)
             view_features[name] = features
             
-            # Readout: Phi_v -> Y_hat_v (For standard VAE loss or prediction)
-            y_recons[name] = self.readouts[name](features)
-        
-            # Readout: Phi_v -> Y_hat_v (For standard VAE loss or prediction)
-            y_recons[name] = self.readouts[name](features)
+            # Readout: Phi_v -> Y_hat_v (Standard VAE reconstruction)
+            # Skip if disabled OR compute_reconstructions is False
+            if compute_reconstructions and self.readouts[name] is not None:
+                y_recons[name] = self.readouts[name](features)
+            else:
+                y_recons[name] = None
         
         if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             return y_recons, batch_mu, batch_log_sigma, mu_enc, view_features
@@ -331,7 +331,8 @@ class CNG_MV_GPLVM(nn.Module):
         use_gp_loss: 是否使用 Yang (2025) 的 GP 边际似然损失
         """
         # Pass views_batch to forward for Amortized Inference support
-        outputs = self.forward(batch_indices, views_batch)
+        # If using GP loss, we can skip reconstruction for performance
+        outputs = self.forward(batch_indices, views_batch, compute_reconstructions=not use_gp_loss)
         
         if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             y_recons, mu, log_sigma, mu_enc, view_features = outputs

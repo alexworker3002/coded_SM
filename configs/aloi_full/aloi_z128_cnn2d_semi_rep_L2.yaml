@@ -1,0 +1,44 @@
+experiment:
+  dataset: aloi
+  device: auto
+  name: aloi_z128_cnn2d_semi_rep_L2_full
+  seed: 42
+
+kernels:
+  num_mixtures: 4
+  rff_samples: 1000
+  type: ng_sm
+
+latent_space:
+  ecc_type: repetition
+  info_dim: 128
+  redundancy_factor: 2
+
+model:
+  encoder_type: cnn2d
+  inference_mode: semi_amortized
+
+training:
+  alignment_beta: 0.01
+  batch_size: 256
+  num_workers: 0
+  epochs: 500
+  log_interval: 10
+  lr: 0.001
+  use_amp: True
+  use_gp_loss: True
+
+views:
+  light_dir1: {input_dim: 82944, likelihood: gaussian}
+  light_dir2: {input_dim: 82944, likelihood: gaussian}
+  light_dir3: {input_dim: 82944, likelihood: gaussian}
+  light_dir4: {input_dim: 82944, likelihood: gaussian}
+
+
+dataset_kwargs:
+  mode: illumination
+view_shapes:
+  light_dir1: [3, 144, 192]
+  light_dir2: [3, 144, 192]
+  light_dir3: [3, 144, 192]
+  light_dir4: [3, 144, 192]

@@ -33,3 +33,7 @@ docs/
 # ALOI Dataset (large image dataset, ~2.9GB)
 data/aloi/*.tar
 data/aloi/raw/
+data/aloi/*.pt
+
+# Archives
+configs/archive/

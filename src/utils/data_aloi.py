@@ -75,8 +75,25 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
     num_samples = len(object_ids)
     print(f"[ALOI] Loading {num_samples} objects in '{mode}' mode...")
     
-    # Initialize storage
+    # 1. Define cache path
+    cache_name = f"cache_{mode}_{num_samples}.pt"
+    cache_path = os.path.join(data_dir, cache_name)
+    
+    # 2. Try loading from cache
+    if os.path.exists(cache_path):
+        print(f"[ALOI] Found cache at {cache_path}. Loading...")
+        try:
+            cache_data = torch.load(cache_path)
+            # Verify cache contains all views
+            if all(v in cache_data['views'] for v in (view_configs.keys() if mode in ["illumination", "color"] else tar_paths.keys())):
+                print(f"[ALOI] Cache loaded successfully. {num_samples} samples.")
+                return MultiViewDataset(cache_data['views'], cache_data['labels'])
+        except Exception as e:
+            print(f"⚠️  Cache load failed: {e}. Re-loading from scratch.")
+
+    # 3. Initialize storage and progress tracking
     processed_views = {}
+    from tqdm import tqdm
     
     # Check if raw data exists for faster loading
     raw_root = os.path.join(data_dir, "raw", "png4")
@@ -89,9 +106,10 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
     if mode in ["illumination", "color"]:
         for view_name, suffix in view_configs.items():
             images = []
+            print(f"  Extracting view: {view_name}...")
             if use_raw:
                 # Fast path: Disk
-                for obj_id in object_ids:
+                for obj_id in tqdm(object_ids, desc=f"Loading {view_name}"):
                     img_path = os.path.join(raw_root, str(obj_id), f"{obj_id}{suffix}.png")
                     try:
                         img = Image.open(img_path).convert('RGB')
@@ -101,7 +119,7 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
             else:
                 # Slow path: TAR
                 with tarfile.open(tar_path, 'r') as tar:
-                    for obj_id in object_ids:
+                    for obj_id in tqdm(object_ids, desc=f"Loading {view_name}"):
                         filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
                         try:
                             member = tar.getmember(filename)
@@ -117,9 +135,9 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
     elif mode == "mixed":
         for view_name, (tar_path, suffix) in tar_paths.items():
             images = []
+            print(f"  Extracting view: {view_name}...")
             if use_raw:
-                # Fast path: Disk
-                for obj_id in object_ids:
+                for obj_id in tqdm(object_ids, desc=f"Loading {view_name}"):
                     img_path = os.path.join(raw_root, str(obj_id), f"{obj_id}{suffix}.png")
                     try:
                         img = Image.open(img_path).convert('RGB')
@@ -127,9 +145,8 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                     except FileNotFoundError:
                         images.append(torch.zeros(3, 144, 192))
             else:
-                # Slow path: TAR
                 with tarfile.open(tar_path, 'r') as tar:
-                    for obj_id in object_ids:
+                    for obj_id in tqdm(object_ids, desc=f"Loading {view_name}"):
                         filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
                         try:
                             member = tar.getmember(filename)
@@ -141,9 +158,12 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
             
             processed_views[view_name] = torch.stack(images)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
+
+    # 4. Finalize and Cache
+    labels = torch.tensor(object_ids, dtype=torch.long) - 1  # 0-indexed labels
     
-    # Labels: Each object is a class
-    labels = torch.tensor(object_ids, dtype=torch.long) - 1  # Convert to 0-indexed
+    print(f"[ALOI] Saving processed data to cache: {cache_path}...")
+    torch.save({'views': processed_views, 'labels': labels}, cache_path)
     
-    print(f"[ALOI] Loaded {num_samples} objects with {len(processed_views)} views")
+    print(f"[ALOI] Loading complete: {num_samples} objects, {len(processed_views)} views.")
     return MultiViewDataset(processed_views, labels)

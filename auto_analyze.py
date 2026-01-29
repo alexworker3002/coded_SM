@@ -52,6 +52,8 @@ def analyze_experiment(exp_dir, device='cuda'):
     view_dims = {k: v.shape[1] for k, v in dataset.views.items()}
     num_data = len(dataset)
     
+    view_shapes = cfg.get('view_shapes', cfg.get('views_shapes', None))
+    
     model = CNG_MV_GPLVM(
         num_data=num_data,
         input_dim=cfg['latent_space']['info_dim'],
@@ -62,7 +64,9 @@ def analyze_experiment(exp_dir, device='cuda'):
         inference_mode=cfg['model']['inference_mode'],
         encoder_type=cfg['model']['encoder_type'],
         num_mixtures=cfg['kernels']['num_mixtures'],
-        rff_samples=cfg['kernels']['rff_samples']
+        rff_samples=cfg['kernels']['rff_samples'],
+        view_shapes=view_shapes,
+        use_readouts=(view_shapes is None) # Match engine.py logic
     ).to(device)
     
     ckpt_path = os.path.join(exp_dir, "final_model.pth")
@@ -98,8 +102,14 @@ def analyze_experiment(exp_dir, device='cuda'):
                 for view_name in view_dims.keys():
                     y_true = views[view_name]
                     y_pred = y_recons[view_name]
-                    error = torch.mean((y_true - y_pred)**2, dim=1)
-                    recon_errors_per_view[view_name].append(error.cpu())
+                    if y_pred is not None:
+                        # Flatten y_true if needed
+                        if y_true.dim() > 2:
+                            y_true = y_true.view(y_true.size(0), -1)
+                        error = torch.mean((y_true - y_pred)**2, dim=1)
+                        recon_errors_per_view[view_name].append(error.cpu())
+                    else:
+                        recon_errors_per_view[view_name].append(torch.zeros(y_true.size(0)))
             
             elif model.inference_mode == 'direct':
                 mu_opt = model.q_mu[indices]
@@ -310,12 +320,22 @@ def main():
     
     print(f"[Auto-Analyze] Using device: {device}")
     
-    exp_folders = sorted(glob.glob(args.experiments))
+    raw_folders = sorted(glob.glob(args.experiments))
+    exp_folders = []
+    for f in raw_folders:
+        if os.path.exists(os.path.join(f, "config.yaml")):
+            exp_folders.append(f)
+        elif os.path.isdir(f):
+            # Try subdirectories (Batch Root case)
+            subdirs = [os.path.join(f, d) for d in os.listdir(f) 
+                      if os.path.isdir(os.path.join(f, d)) and os.path.exists(os.path.join(f, d, "config.yaml"))]
+            exp_folders.extend(subdirs)
+            
     if not exp_folders:
-        print(f"❌ No experiments found matching: {args.experiments}")
+        print(f"❌ No valid experiment directories found matching: {args.experiments}")
         sys.exit(1)
     
-    print(f"[Auto-Analyze] Found {len(exp_folders)} experiments")
+    print(f"[Auto-Analyze] Found {len(exp_folders)} valid experiments")
     
     all_results = []
     for exp_dir in exp_folders:
