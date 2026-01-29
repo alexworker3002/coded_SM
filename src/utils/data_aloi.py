@@ -78,49 +78,66 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
     # Initialize storage
     processed_views = {}
     
+    # Check if raw data exists for faster loading
+    raw_root = os.path.join(data_dir, "raw", "png4")
+    use_raw = os.path.exists(raw_root)
+    if use_raw:
+        print(f"[ALOI] Found extracted data at {raw_root}. Using fast disk loading.")
+    else:
+        print(f"[ALOI] Extracted data not found at {raw_root}. Falling back to slow TAR loading.")
+
     if mode in ["illumination", "color"]:
-        # Single TAR file case
-        print(f"[ALOI] Extracting from {tar_path}...")
-        
         for view_name, suffix in view_configs.items():
             images = []
-            
-            with tarfile.open(tar_path, 'r') as tar:
+            if use_raw:
+                # Fast path: Disk
                 for obj_id in object_ids:
-                    # Construct filename: png4/{obj_id}/{obj_id}{suffix}.png
-                    filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
-                    
+                    img_path = os.path.join(raw_root, str(obj_id), f"{obj_id}{suffix}.png")
                     try:
-                        member = tar.getmember(filename)
-                        f = tar.extractfile(member)
-                        img = Image.open(f).convert('RGB')
-                        img_tensor = transform(img)  # (3, 144, 192)
-                        images.append(img_tensor)
-                    except KeyError:
-                        print(f"⚠️  Missing file: {filename}, using zero placeholder")
+                        img = Image.open(img_path).convert('RGB')
+                        images.append(transform(img))
+                    except FileNotFoundError:
                         images.append(torch.zeros(3, 144, 192))
+            else:
+                # Slow path: TAR
+                with tarfile.open(tar_path, 'r') as tar:
+                    for obj_id in object_ids:
+                        filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
+                        try:
+                            member = tar.getmember(filename)
+                            f = tar.extractfile(member)
+                            img = Image.open(f).convert('RGB')
+                            images.append(transform(img))
+                        except KeyError:
+                            images.append(torch.zeros(3, 144, 192))
             
             processed_views[view_name] = torch.stack(images)  # (N, 3, 144, 192)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
     
     elif mode == "mixed":
-        # Multiple TAR files case
         for view_name, (tar_path, suffix) in tar_paths.items():
             images = []
-            
-            with tarfile.open(tar_path, 'r') as tar:
+            if use_raw:
+                # Fast path: Disk
                 for obj_id in object_ids:
-                    filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
-                    
+                    img_path = os.path.join(raw_root, str(obj_id), f"{obj_id}{suffix}.png")
                     try:
-                        member = tar.getmember(filename)
-                        f = tar.extractfile(member)
-                        img = Image.open(f).convert('RGB')
-                        img_tensor = transform(img)
-                        images.append(img_tensor)
-                    except KeyError:
-                        print(f"⚠️  Missing file: {filename}")
+                        img = Image.open(img_path).convert('RGB')
+                        images.append(transform(img))
+                    except FileNotFoundError:
                         images.append(torch.zeros(3, 144, 192))
+            else:
+                # Slow path: TAR
+                with tarfile.open(tar_path, 'r') as tar:
+                    for obj_id in object_ids:
+                        filename = f"png4/{obj_id}/{obj_id}{suffix}.png"
+                        try:
+                            member = tar.getmember(filename)
+                            f = tar.extractfile(member)
+                            img = Image.open(f).convert('RGB')
+                            images.append(transform(img))
+                        except KeyError:
+                            images.append(torch.zeros(3, 144, 192))
             
             processed_views[view_name] = torch.stack(images)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
