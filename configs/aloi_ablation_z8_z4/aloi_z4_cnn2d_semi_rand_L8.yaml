@@ -1,0 +1,17 @@
+experiment: {dataset: aloi, device: auto, seed: 42, name: aloi_z4_cnn2d_semi_rand_L8}
+kernels: {type: ng_sm, num_mixtures: 4, rff_samples: 1000}
+training: {batch_size: 256, epochs: 500, lr: 0.001, use_amp: true, log_interval: 10,
+  alignment_beta: 0.01, use_gp_loss: true, num_workers: 0}
+views:
+  light_dir1: {input_dim: 82944, likelihood: gaussian}
+  light_dir2: {input_dim: 82944, likelihood: gaussian}
+  light_dir3: {input_dim: 82944, likelihood: gaussian}
+  light_dir4: {input_dim: 82944, likelihood: gaussian}
+dataset_kwargs: {mode: illumination}
+view_shapes:
+  light_dir1: [3, 144, 192]
+  light_dir2: [3, 144, 192]
+  light_dir3: [3, 144, 192]
+  light_dir4: [3, 144, 192]
+latent_space: {info_dim: 4, redundancy_factor: 8, ecc_type: random_gaussian}
+model: {inference_mode: semi_amortized, encoder_type: cnn2d}
