@@ -56,6 +56,9 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
             "color2": (os.path.join(data_dir, "aloi_red4_col.tar"), "_i170"),
             "color3": (os.path.join(data_dir, "aloi_red4_col.tar"), "_i210")
         }
+    elif mode == "rotation":
+        # Pass validation here, specific logic is handled later in the function
+        view_configs = {} # Placeholder, not used for rotation mode
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
@@ -158,6 +161,68 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
             
             processed_views[view_name] = torch.stack(images)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
+
+    elif mode == "rotation":
+        # Harder task: Different rotations are treated as separate samples (N becomes 4 * num_objects)
+        # Sample 1: Front (0) -> Views: -5, 0, +5
+        # Sample 2: Right (90) -> Views: 85, 90, 95
+        # Sample 3: Back (180) -> Views: 175, 180, 185
+        # Sample 4: Left (270) -> Views: 265, 270, 275
+        
+        sectors = {
+            "front": [355, 0, 5],
+            "right": [85, 90, 95],
+            "back": [175, 180, 185],
+            "left": [265, 270, 275]
+        }
+        
+        # View names are "angle_minus5", "angle_0", "angle_plus5"
+        view_names = ["view_left", "view_center", "view_right"]
+        
+        # Initialize lists for all views
+        all_view_data = {v: [] for v in view_names}
+        expanded_labels = []
+        
+        print(f"[ALOI] Rotation Mode: Generating 4 samples per object (Front/Right/Back/Left)...")
+        
+        if use_raw:
+            # Fast path: Disk
+            for obj_id in tqdm(object_ids, desc="Loading Rotations"):
+                # For each object, generate 4 samples
+                for sector_name, angles in sectors.items():
+                    # Add label (same label for all 4 sectors of this object)
+                    expanded_labels.append(obj_id - 1)
+                    
+                    # Load 3 views for this sector
+                    for i, angle in enumerate(angles):
+                        angle_norm = angle % 360  # Handle 360 -> 0 if needed (though files use r0, r5...)
+                        img_path = os.path.join(raw_root, str(obj_id), f"{obj_id}_r{angle_norm}.png")
+                        try:
+                            img = Image.open(img_path).convert('RGB')
+                            all_view_data[view_names[i]].append(transform(img))
+                        except FileNotFoundError:
+                            # Try alternate naming if needed, or zero pad
+                            print(f"Warning: Missing {img_path}")
+                            all_view_data[view_names[i]].append(torch.zeros(3, 144, 192))
+        else:
+             print("Error: Rotation mode currently requires extracted raw data for speed.")
+             return None
+
+        # Stack tensors
+        for v in view_names:
+            processed_views[v] = torch.stack(all_view_data[v])
+            print(f"  ✓ {v}: {processed_views[v].shape}")
+            
+        # Update labels to be the expanded list
+        # We assign to local variable 'labels' which will be returned
+        # Note: We need to override the default labels created at the end of function
+        final_labels = torch.tensor(expanded_labels, dtype=torch.long)
+        
+        print(f"[ALOI] Saving processed data to cache: {cache_path}...")
+        torch.save({'views': processed_views, 'labels': final_labels}, cache_path)
+        
+        print(f"[ALOI] Loading complete: {len(final_labels)} samples (4x objects), {len(processed_views)} views.")
+        return MultiViewDataset(processed_views, final_labels)
 
     # 4. Finalize and Cache
     labels = torch.tensor(object_ids, dtype=torch.long) - 1  # 0-indexed labels

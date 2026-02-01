@@ -46,7 +46,9 @@ def analyze_experiment(exp_dir, device='cuda'):
     print(f"  Processing: {exp_name}")
     
     dataset_name = cfg['experiment']['dataset']
-    dataset = get_dataset(dataset_name)
+    dataset_kwargs = cfg.get('dataset_kwargs', {})
+    print(f"  Dataset: {dataset_name} | Args: {dataset_kwargs}")
+    dataset = get_dataset(dataset_name, **dataset_kwargs)
     loader = DataLoader(dataset, batch_size=512, shuffle=False)
     
     view_dims = {k: v.shape[1] for k, v in dataset.views.items()}
