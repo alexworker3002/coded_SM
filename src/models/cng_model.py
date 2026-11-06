@@ -30,10 +30,12 @@ class CNG_MV_GPLVM(nn.Module):
                  num_mixtures=4,  # Q: 核函数混合成分数
                  rff_samples=100, # S: RFF 采样数
                  z_init_std=0.01, # q(z) 初始标准差
-                 ecc_matrix_path=None, # 预定义的 ECC 矩阵路径
+                 ecc_matrix_path=None, # 预定义的 ECC 矩阵路径 (Restored)
                  inference_mode='direct', # 'direct' (GPLVM) or 'amortized' (VAE)
                  ecc_mode='repetition', # 'repetition' or 'random_gaussian'
-                 encoder_type='mlp' # 'mlp' or 'cnn'
+                 encoder_type='mlp', # 'mlp', 'cnn', or 'cnn2d'
+                 view_shapes=None, # Dict[str, tuple]: {view_name: (C, H, W)} for image views
+                 use_readouts=True # Whether to instantiate mapping layers (Linear(8k, Dy))
                  ):
         super().__init__()
         
@@ -45,6 +47,9 @@ class CNG_MV_GPLVM(nn.Module):
         self.inference_mode = inference_mode
         self.ecc_mode = ecc_mode
         self.encoder_type = encoder_type
+        self.view_shapes = view_shapes or {}
+        if inference_mode.startswith('coded_') and not use_ecc:
+            raise ValueError("Coded inference requires use_ecc=True and a valid ECC mode")
         
         # =========================================================
         # 1. Variational Inference Strategy
@@ -56,7 +61,40 @@ class CNG_MV_GPLVM(nn.Module):
         elif self.inference_mode == 'amortized':
             print(f"[Model] Using Amortized Inference (Deep Encoder: {encoder_type})")
             from src.models.components.encoder import MultiViewEncoder
-            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type)
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type, view_shapes=self.view_shapes)
+        elif self.inference_mode == 'semi_amortized':
+            print(f"[Model] Using SEMI-Amortized Inference (Direct + Encoder: {encoder_type})")
+            # 1. Direct Parameters (for Z_opt)
+            self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
+            self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+            # 2. Encoder (to be aligned)
+            from src.models.components.encoder import MultiViewEncoder
+            self.encoder = MultiViewEncoder(view_dims, input_dim, arch_type=encoder_type, view_shapes=self.view_shapes)
+        
+        elif self.inference_mode == 'coded_amortized':
+            print(f"[Model] Using CODED-Amortized Inference (Encoder -> X -> Decoder -> Z)")
+            from src.models.components.encoder import MultiViewEncoder
+            
+            # Encoder predicts High-Dim X (L * Z)
+            self.x_dim_coded = input_dim * redundancy_factor
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
+            
+            
+        elif self.inference_mode == 'coded_semi_amortized':
+            print(f"[Model] Using CODED-SEMI-Amortized Inference")
+            print(f"        (Direct Z_opt + [Encoder -> X -> Decoder -> Z_enc])")
+            
+            # 1. Direct Parameters (for Z_opt, Low Dim)
+            self.q_mu = nn.Parameter(torch.randn(num_data, input_dim) * z_init_std)
+            self.q_log_sigma = nn.Parameter(torch.ones(num_data, input_dim) * np.log(z_init_std))
+            
+            # 2. Coded Encoder Components
+            from src.models.components.encoder import MultiViewEncoder
+            
+            # Encoder predicts High-Dim X
+            self.x_dim_coded = input_dim * redundancy_factor
+            self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
+
         else:
             raise ValueError(f"Unknown inference mode: {inference_mode}")
         
@@ -77,6 +115,10 @@ class CNG_MV_GPLVM(nn.Module):
             self.ecc_module = nn.Identity()
             print(f"[Model] Initialized WITHOUT ECC (Baseline Mode). Z({input_dim}) -> X({self.x_dim})")
 
+        if self.inference_mode.startswith('coded_'):
+            from src.modules.ecc_decoder import LinearECCDecoder
+            self.ecc_decoder = LinearECCDecoder(self.ecc_module.G)
+
         # =========================================================
         # 3. Multi-View Components (Kernels + Readouts)
         # =========================================================
@@ -84,18 +126,24 @@ class CNG_MV_GPLVM(nn.Module):
         self.readouts = nn.ModuleDict()
         self.log_noise_sigmas = nn.ParameterDict()
         
-        # RFF 输出维度 (Bias-free Concatenated Cos/Sin): 2 * Q * S
-        self.feature_dim = 2 * num_mixtures * rff_samples
+        # Feature dim will be obtained from kernel after initialization
+        self.num_mixtures = num_mixtures
+        self.rff_samples = rff_samples
         
         for name, v_dim in view_dims.items():
             # Kernel
             self.kernels[name] = NextGenSpectralMixtureKernel(
                 num_dims=self.x_dim,
                 num_mixtures=num_mixtures, 
-                rff_samples=rff_samples
+                rff_samples=rff_samples,
+                resample_rff=not use_readouts
             )
-            # Readout
-            self.readouts[name] = nn.Linear(self.feature_dim, v_dim, bias=True)
+            # Readout (Optional: save memory for high-dim images)
+            if use_readouts:
+                self.readouts[name] = nn.Linear(self.kernels[name].feature_dim, v_dim, bias=True)
+            else:
+                self.readouts[name] = None
+                
             # Noise (init log(-2) ~ 0.135)
             self.log_noise_sigmas[name] = nn.Parameter(torch.tensor(-2.0))
 
@@ -107,9 +155,19 @@ class CNG_MV_GPLVM(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
+    def infer_latents(self, views_batch):
+        """Infer from the available views, decoding coded modes into Z coordinates."""
+        if self.inference_mode == 'direct':
+            raise ValueError("Direct inference has no encoder for new or missing-view inputs")
+        mu, log_sigma = self.encoder(views_batch)
+        if self.inference_mode.startswith('coded_'):
+            mu, log_sigma = self.ecc_decoder(mu, log_sigma)
+        return mu, log_sigma
+
     def get_latents(self, batch_indices=None, views_batch=None):
         """
         根据推断模式获取 q(z) 参数
+        Semi-Amortized: returns (mu_opt, log_sigma_opt) AND (mu_enc, log_sigma_enc)
         """
         if self.inference_mode == 'direct':
             if batch_indices is None:
@@ -120,59 +178,205 @@ class CNG_MV_GPLVM(nn.Module):
         elif self.inference_mode == 'amortized':
             if views_batch is None:
                 raise ValueError("In amortized mode, views_batch must be provided to forward()")
-            return self.encoder(views_batch)
+            return self.infer_latents(views_batch)
+            
+        elif self.inference_mode == 'semi_amortized':
+            # Direct Part
+            if batch_indices is None:
+                mu_opt, log_sigma_opt = self.q_mu, self.q_log_sigma
+            else:
+                mu_opt, log_sigma_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+            
+            # Encoder Part
+            if views_batch is None:
+                # During global eval or something, we might want just Opt?
+                # But typically we provide batch.
+                mu_enc, log_sigma_enc = None, None
+            else:
+                mu_enc, log_sigma_enc = self.infer_latents(views_batch)
+                
+            return (mu_opt, log_sigma_opt), (mu_enc, log_sigma_enc)
+            
+        elif self.inference_mode == 'coded_amortized':
+            if views_batch is None:
+                raise ValueError("Coded Amortized mode requires views_batch")
+            
+            # 1. Prediction: Y -> q(X)
+            return self.infer_latents(views_batch)
+            
+        elif self.inference_mode == 'coded_semi_amortized':
+            # 1. Direct Part (Z_opt)
+            if batch_indices is None:
+                mu_opt, log_sigma_opt = self.q_mu, self.q_log_sigma
+            else:
+                mu_opt, log_sigma_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
 
-    def forward(self, batch_indices=None, views_batch=None):
+            # 2. Coded Encoder Part (Y -> X -> Z_enc)
+            if views_batch is None:
+                mu_enc, log_sigma_enc = None, None
+            else:
+                mu_enc, log_sigma_enc = self.infer_latents(views_batch)
+                
+            return (mu_opt, log_sigma_opt), (mu_enc, log_sigma_enc)
+
+    def forward(self, batch_indices=None, views_batch=None, compute_reconstructions=True):
         """
         前向传播
         """
         # 1. 采样 Z
-        batch_mu, batch_log_sigma = self.get_latents(batch_indices, views_batch)
-        z_sample = self.reparameterize(batch_mu, batch_log_sigma)
+        latents = self.get_latents(batch_indices, views_batch)
+        
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
+            (mu_opt, log_sigma_opt), (mu_enc, _) = latents
+            # For reconstruction, we use Z_opt (Direct Optimization)
+            z_sample = self.reparameterize(mu_opt, log_sigma_opt) if self.training else mu_opt
+            # We return mu_enc for Alignment Loss calculation in engine
+            batch_mu = mu_opt
+            batch_log_sigma = log_sigma_opt
+        else:
+            batch_mu, batch_log_sigma = latents
+            z_sample = self.reparameterize(batch_mu, batch_log_sigma) if self.training else batch_mu
+            mu_enc = None # Placeholder
         
         # 2. ECC 编码: Z -> X
+        # 注意: 对于 coded_amortized，我们已经“解码”到了 Z，现在重新编码回 X 供 Kernel 使用
+        # 这确保了 Kernel 始终在高维冗余空间如果 use_ecc=True
+        # 如果 coded_amortized 且 use_ecc=True，流向是 Y->X_noisy->Z_clean->X_clean->Kernel
+        # 这样利用了 ECC 的去噪能力
         x_sample = self.ecc_module(z_sample)
         
-        # 3. Multi-View Mapping
+        # 3. Multi-View Mapping (RFF Features for GP Loss)
         y_recons = {}
+        view_features = {}
         
         for name in self.view_dims.keys():
             # Kernel Mapping: X -> Phi_v(X)
             features = self.kernels[name].get_rff_feature(x_sample)
-            # Readout: Phi_v -> Y_hat_v
-            y_recons[name] = self.readouts[name](features)
+            view_features[name] = features
+            
+            # Readout: Phi_v -> Y_hat_v (Standard VAE reconstruction)
+            # Skip if disabled OR compute_reconstructions is False
+            if compute_reconstructions and self.readouts[name] is not None:
+                y_recons[name] = self.readouts[name](features)
+            else:
+                y_recons[name] = None
         
-        return y_recons, batch_mu, batch_log_sigma
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
+            return y_recons, batch_mu, batch_log_sigma, mu_enc, view_features
+            
+        return y_recons, batch_mu, batch_log_sigma, view_features
 
-    def compute_loss(self, views_batch, batch_indices, beta=1.0):
+    def _compute_gp_marginal_nll(self, Phi, y_true, noise_sigma):
+        """
+        利用 Woodbury 恒等式高效计算 GP 边际似然的负对数
+        Phi: (N, D) - RFF 特征
+        y_true: (N, Dy) - 观测数据
+        noise_sigma: (Scalar) - 噪声标准差
+        """
+        # FORCE FP32 for numerical stability in Cholesky
+        # Even if autocast is enabled globally, this block runs in FP32
+        with torch.amp.autocast('cuda', enabled=False):
+            Phi = Phi.float()
+            y_true_orig = y_true.float()
+            noise_sigma = noise_sigma.float()
+            
+            # Flatten y_true if it's an image: (N, C, H, W) -> (N, C*H*W)
+            if y_true_orig.dim() > 2:
+                y_true = y_true_orig.view(y_true_orig.size(0), -1)
+            else:
+                y_true = y_true_orig
+            
+            N, D = Phi.shape
+            Dy = y_true.shape[1]
+            # The same effective variance must be used in both algebraic branches.
+            noise_var = noise_sigma.pow(2).clamp(min=1e-6) + 1e-5
+            
+            if N > D:
+                # Woodbury Identity Case (Scalable)
+                # A = Phi^T Phi + sigma^2 I
+                A = Phi.t() @ Phi + noise_var * torch.eye(D, device=Phi.device)
+                L = torch.linalg.cholesky(A)
+                
+                # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
+                Phi_T_Y = Phi.t() @ y_true
+                L_inv_Phi_Y = torch.linalg.solve_triangular(L, Phi_T_Y, upper=False)
+                
+                # neg_log_lik = 0.5 * [ (Y^T Y - ||L_inv_Phi_Y||^2) / noise_var + 2*log|L| + (N-D)*log(noise_var) + N*log(2pi) ]
+                # Note: We divide by N and Dy to keep scale stable for different datasets
+                y_sq_sum = y_true.pow(2).sum()
+                quad_term = (y_sq_sum - L_inv_Phi_Y.pow(2).sum()) / noise_var
+                
+                log_det_A = 2 * torch.log(torch.diag(L).clamp(min=1e-10)).sum()
+                # log|K| = log|Phi Phi^T + sigma^2 I| = log|Phi^T Phi + sigma^2 I| + (N-D)log(sigma^2)
+                # BUGFIX: noise_var is already a tensor, don't wrap it again
+                log_det_K = log_det_A + (N - D) * torch.log(noise_var.clamp(min=1e-10))
+                
+                nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+            else:
+                # Direct Case (N <= D)
+                K = Phi @ Phi.t() + noise_var * torch.eye(N, device=Phi.device)
+                L = torch.linalg.cholesky(K)
+                L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
+                
+                quad_term = L_inv_Y.pow(2).sum()
+                log_det_K = 2 * torch.log(torch.diag(L).clamp(min=1e-10)).sum()
+                nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
+                
+            return nll
+
+    def compute_loss(self, views_batch, batch_indices, beta=1.0, use_gp_loss=True,
+                     alignment_beta=0.1):
         """
         views_batch: dict {view_name: tensor}
+        use_gp_loss: 是否使用 Yang (2025) 的 GP 边际似然损失
         """
         # Pass views_batch to forward for Amortized Inference support
-        y_recons, mu, log_sigma = self.forward(batch_indices, views_batch)
+        # If using GP loss, we can skip reconstruction for performance
+        outputs = self.forward(batch_indices, views_batch, compute_reconstructions=not use_gp_loss)
         
-        total_recon_loss = 0.0
+        if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
+            y_recons, mu, log_sigma, mu_enc, view_features = outputs
+        else:
+            y_recons, mu, log_sigma, view_features = outputs
+            mu_enc = None
+        
+        total_data_loss = 0.0
         details = {}
         
-        # --- 1. Reconstruction Loss (Sum over views) ---
+        # --- 1. Data Loss (GP Marginal NLL or Reconstruction MSE) ---
         for name, y_true in views_batch.items():
-            y_pred = y_recons[name]
             noise_sigma = torch.exp(self.log_noise_sigmas[name])
             
-            # NLL
-            mse = (y_true - y_pred).pow(2)
-            nll = torch.log(noise_sigma) + 0.5 * mse / (noise_sigma ** 2)
-            view_loss = nll.sum()
+            if use_gp_loss:
+                # Yang (2025) 核心逻辑: GP Marginal Likelihood
+                Phi = view_features[name]
+                view_loss = self._compute_gp_marginal_nll(Phi, y_true, noise_sigma)
+            else:
+                # 标准 VAE 逻辑: Gaussian Reconstruction NLL
+                y_pred = y_recons[name]
+                if y_pred is None:
+                    raise ValueError("Reconstruction loss requires use_readouts=True")
+                y_true = y_true.reshape(y_true.size(0), -1)
+                mse = (y_true - y_pred).pow(2)
+                nll = torch.log(noise_sigma) + 0.5 * mse / (noise_sigma ** 2)
+                view_loss = nll.sum()
             
-            total_recon_loss += view_loss
+            total_data_loss += view_loss
             details[f"recon_{name}"] = view_loss.item()
             details[f"sigma_{name}"] = noise_sigma.item()
         
-        # --- 2. KL Divergence for Z (Shared) ---
+        # --- 2. KL Divergence for Z (Yang 2025 Scaling: 1/(N*50)) ---
         var = torch.exp(2 * log_sigma)
-        kl_div = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
+        kl_div_raw = -0.5 * torch.sum(1 + 2 * log_sigma - mu.pow(2) - var)
+        kl_div_scaled = kl_div_raw / (self.num_data * 50)  # Yang (2025) scaling
         
-        details["kl_loss"] = kl_div.item()
-        details["recon_loss"] = total_recon_loss.item() 
+        details["kl_loss"] = kl_div_raw.item()
+        details["kl_scaled"] = kl_div_scaled.item()
+        details["data_loss"] = total_data_loss.item() 
         
-        return total_recon_loss + beta * kl_div, details
+        loss = total_data_loss + beta * kl_div_scaled
+        if mu_enc is not None:
+            align_loss = F.mse_loss(mu_enc, mu.detach(), reduction='sum')
+            loss = loss + alignment_beta * align_loss
+            details['align_loss'] = align_loss.item()
+        return loss, details

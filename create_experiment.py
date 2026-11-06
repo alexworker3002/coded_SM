@@ -1,0 +1,182 @@
+
+import os
+import argparse
+import yaml
+import stat
+import copy
+import shlex
+import sys
+from pathlib import Path
+from datetime import datetime
+
+# Base Config Template
+BASE_CONFIG = {
+    "experiment": {
+        "name": "template", 
+        "device": "auto",  
+        "seed": 42,
+        "dataset": "100leaves"
+    },
+    "latent_space": {
+        "info_dim": 32,
+        "redundancy_factor": 1, 
+        "ecc_type": "none"
+    },
+    "model": {
+        "inference_mode": "direct", # direct, amortized, semi_amortized
+        "encoder_type": "mlp"
+    },
+    "kernels": {
+        "type": "ng_sm",
+        "num_mixtures": 4,
+        "rff_samples": 1000 
+    },
+    "views": {
+        "shape":   { "input_dim": 64, "likelihood": "gaussian" },
+        "texture": { "input_dim": 64, "likelihood": "gaussian" },
+        "margin":  { "input_dim": 64, "likelihood": "gaussian" }
+    },
+    "training": {
+        "batch_size": 128, 
+        "lr": 0.001,
+        "epochs": 100, 
+        "log_interval": 10,
+        "alignment_beta": 0.01,
+        "use_gp_loss": True
+    }
+}
+
+DATASET_DIMS = {
+    '100leaves': {
+        "shape": 64, "texture": 64, "margin": 64
+    },
+    'caltech101-7': {
+        "gabor": 48, "wm": 40, "centrist": 100, "hog": 100, "gist": 100, "lbp": 100
+    },
+    'mfeat': {
+        "fou": 76, "fac": 216, "kar": 64, "pix": 240, "zer": 47, "mor": 6
+    }
+}
+
+def create_experiment(args):
+    # 1. Prepare Experiment Name and Directory
+    timestamp = datetime.now().strftime('%Y%b%d_%H-%M-%S')
+    exp_folder_name = f"{timestamp}_{args.name}"
+    exp_dir = os.path.join("experiments", exp_folder_name)
+    
+    os.makedirs(exp_dir, exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, "checkpoints"), exist_ok=True)
+    
+    print(f"[Create] Experiment Directory: {exp_dir}")
+    
+    # 2. Build Config
+    cfg = copy.deepcopy(BASE_CONFIG)
+    cfg['experiment']['name'] = args.name
+    cfg['experiment']['dataset'] = args.dataset
+    cfg['experiment']['seed'] = args.seed
+    cfg['experiment']['device'] = args.device
+    cfg['experiment']['deterministic'] = True
+    
+    cfg['latent_space']['info_dim'] = args.z_dim
+    cfg['latent_space']['redundancy_factor'] = args.redundancy
+    cfg['latent_space']['ecc_type'] = args.ecc_type
+    
+    cfg['model']['inference_mode'] = args.inference
+    cfg['model']['encoder_type'] = args.encoder
+    
+    cfg['training']['epochs'] = args.epochs
+    cfg['training']['batch_size'] = args.batch_size
+    cfg['training']['lr'] = args.lr
+    cfg['training']['use_gp_loss'] = args.gp_loss
+    cfg['kernels']['rff_samples'] = args.rff_samples
+    cfg['kernels']['num_mixtures'] = args.num_mixtures
+    if args.inference.startswith('coded_') and args.ecc_type == 'none':
+        raise ValueError('Coded inference requires --ecc_type repetition or random_gaussian')
+    if args.ecc_type == 'none' and args.redundancy != 1:
+        raise ValueError('--ecc_type none requires --redundancy 1')
+    if args.dataset == 'aloi':
+        cfg['dataset_kwargs'] = {'mode': args.aloi_mode}
+    
+    # Adjust View Dims based on dataset
+    if args.dataset in DATASET_DIMS:
+        dims = DATASET_DIMS[args.dataset]
+        cfg['views'] = {k: {"input_dim": v, "likelihood": "gaussian"} for k, v in dims.items()}
+    else:
+        print(f"[Warning] Unknown dataset '{args.dataset}', using default 100Leaves view structure. Please edit config manually if needed.")
+        
+    # Write Config
+    config_path = os.path.join(exp_dir, "config.yaml")
+    with open(config_path, 'w') as f:
+        yaml.dump(cfg, f, default_flow_style=False)
+    print(f"[Create] Config written to {config_path}")
+    
+    # 3. Create run.sh
+    run_script_path = os.path.join(exp_dir, "run.sh")
+    with open(run_script_path, 'w') as f:
+        f.write("#!/bin/bash\nset -euo pipefail\n\n")
+        f.write("export OMP_NUM_THREADS=1\n")
+        root = Path(__file__).resolve().parent
+        f.write(f"cd {shlex.quote(str(root))}\n")
+        command = [sys.executable, '-m', 'src.trainer.engine', '--config',
+                   os.path.abspath(config_path), '--experiment_dir', os.path.abspath(exp_dir)]
+        f.write('exec ' + shlex.join(command) + '\n')
+    
+    # Make executable
+    st = os.stat(run_script_path)
+    os.chmod(run_script_path, st.st_mode | stat.S_IEXEC)
+    print(f"[Create] Run script written to {run_script_path}")
+    
+    # 4. Create README.md
+    readme_path = os.path.join(exp_dir, "README.md")
+    with open(readme_path, 'w') as f:
+        f.write(f"# Experiment: {args.name}\n\n")
+        f.write(f"**Date:** {timestamp}\n")
+        f.write(f"**Description:** {args.description}\n\n")
+        f.write("## Configuration Summary\n")
+        f.write(f"- Dataset: {args.dataset}\n")
+        f.write(f"- Model: {args.inference} (Encoder: {args.encoder})\n")
+        f.write(f"- Latent: Z={args.z_dim}, L={args.redundancy}, ECC={args.ecc_type}\n")
+        f.write(f"- GP Loss: {args.gp_loss}\n")
+        
+    print(f"[Create] README written to {readme_path}")
+    print(f"\n>>> Setup Complete. To run:\n    {run_script_path}\n")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Create a self-contained experiment folder.")
+    
+    # Basic info
+    parser.add_argument("--name", type=str, required=True, help="Experiment name (slug)")
+    parser.add_argument("--description", type=str, default="No description provided.", help="Experiment description")
+    
+    # Config Params
+    parser.add_argument("--dataset", type=str, default="100leaves", choices=['100leaves', 'caltech101-7', 'mfeat', 'aloi'])
+    parser.add_argument('--device', default='auto')
+    parser.add_argument('--aloi-mode', choices=['rotation', 'illumination', 'color', 'mixed'], default='rotation')
+    parser.add_argument("--z_dim", type=int, default=32)
+    parser.add_argument("--redundancy", type=int, default=1, help="ECC Redundancy Factor L")
+    parser.add_argument("--ecc_type", type=str, default="none", choices=['none', 'repetition', 'random_gaussian'])
+    
+    parser.add_argument("--inference", type=str, default="semi_amortized", 
+                       choices=['direct', 'amortized', 'semi_amortized', 'coded_amortized', 'coded_semi_amortized'],
+                       help="Inference mode")
+    parser.add_argument("--encoder", type=str, default="mlp", choices=['mlp', 'cnn', 'cnn2d'])
+    parser.add_argument('--rff_samples', '--rff-samples', type=int, default=1000)
+    parser.add_argument('--num_mixtures', '--num-mixtures', type=int, default=4)
+    
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--seed", type=int, default=42)
+    
+    # Toggles
+    parser.add_argument("--use_amp", action="store_true", help="Enable Mixed Precision Training (May be unstable for GP)")
+    parser.add_argument("--no_gp_loss", action="store_true", help="Disable GP Loss (use MSE)")
+    
+    args = parser.parse_args()
+    args.gp_loss = not args.no_gp_loss
+
+    # Add to config
+    BASE_CONFIG['training']['use_amp'] = args.use_amp
+    
+    create_experiment(args)

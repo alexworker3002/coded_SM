@@ -3,9 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data (Don't track large datasets)
+# New data files are ignored; datasets already tracked remain versioned.
 data/
-data/processed/
 results/
 references/
 
@@ -16,6 +15,7 @@ checkpoints/
 *.pth
 *.log
 runs/
+experiments/
 
 # System
 .DS_Store
@@ -26,5 +26,15 @@ runs/
 # Environment
 env/
 venv/
+.venv/
+.pytest_cache/
 
 .agent/
+docs/
+# ALOI Dataset (large image dataset, ~2.9GB)
+data/aloi/*.tar
+data/aloi/raw/
+data/aloi/*.pt
+
+# Archives
+configs/archive/

@@ -1,0 +1,19 @@
+{
+  "tests": {
+    "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 .venv/bin/python -m pytest -q",
+    "passed": 29,
+    "failed": 0,
+    "duration_seconds": 5.29
+  },
+  "cuda": {
+    "device": "NVIDIA GeForce RTX 5090",
+    "bf16_supported": true,
+    "gp_amp_step_passed": true
+  },
+  "pip_check": "No broken requirements found.",
+  "diff_check": "passed",
+  "ci_workflow_added": ".github/workflows/tests.yml",
+  "remote_ci_executed_at_report_time": false,
+  "full_real_aloi_experiment_executed": false,
+  "source_sha256": "074c5c44d0fdbf46a72aca6c3a612970e1da6ac2aa8925522426fb1be59de924"
+}

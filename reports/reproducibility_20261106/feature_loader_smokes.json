@@ -1,0 +1,38 @@
+[
+  {
+    "dataset": "100leaves",
+    "device": "cpu",
+    "epochs": 1,
+    "N": 1600,
+    "data_fingerprint_verified_after_reload": true,
+    "acc": 0.3125,
+    "nmi": 0.5910472407782239,
+    "amp_enabled": false,
+    "amp_dtype": null,
+    "source_sha256": "7ae0f816ac8d4980f8e92d9603330195f417c395da03a09cc969b0d2f39aeb27"
+  },
+  {
+    "dataset": "caltech101-7",
+    "device": "cpu",
+    "epochs": 1,
+    "N": 1474,
+    "data_fingerprint_verified_after_reload": true,
+    "acc": 0.24762550881953868,
+    "nmi": 0.07980336344669951,
+    "amp_enabled": false,
+    "amp_dtype": null,
+    "source_sha256": "7ae0f816ac8d4980f8e92d9603330195f417c395da03a09cc969b0d2f39aeb27"
+  },
+  {
+    "dataset": "mfeat",
+    "device": "cuda",
+    "epochs": 1,
+    "N": 2000,
+    "data_fingerprint_verified_after_reload": true,
+    "acc": 0.4235,
+    "nmi": 0.3295298798542699,
+    "amp_enabled": true,
+    "amp_dtype": "torch.bfloat16",
+    "source_sha256": "7ae0f816ac8d4980f8e92d9603330195f417c395da03a09cc969b0d2f39aeb27"
+  }
+]

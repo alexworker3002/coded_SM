@@ -1,14 +1,22 @@
 import os
 import torch
 import numpy as np
+import hashlib
+from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 
 class MultiViewDataset(Dataset):
-    def __init__(self, views_dict, labels):
+    def __init__(self, views_dict, labels, metadata=None):
+        if not views_dict or len(labels) == 0:
+            raise ValueError("Dataset must contain samples and at least one view")
+        for name, view in views_dict.items():
+            if len(view) != len(labels) or view.ndim < 2 or not torch.isfinite(view).all():
+                raise ValueError(f"Invalid view {name}: samples, dimensions or finite values")
         self.views = views_dict
         self.labels = labels
         self.view_names = list(views_dict.keys())
+        self.metadata = metadata or {}
 
     def __len__(self):
         return len(self.labels)
@@ -31,6 +39,8 @@ def load_mfeat_data(data_dir="./data/raw", mode="real"):
     processed_views = {}
     num_samples = 2000 # mfeat 共有 2000 个样本 (10类 x 200)
 
+    if mode not in ('mock', 'real'):
+        raise ValueError(f"Unknown data mode: {mode}")
     if mode == "mock":
         print("💡 [Mock Mode] 正在生成模拟多视图数据以供调试...")
         for view_name, dim in view_dims.items():
@@ -53,4 +63,49 @@ def load_mfeat_data(data_dir="./data/raw", mode="real"):
         
         labels = torch.tensor(np.repeat(np.arange(10), 200), dtype=torch.long)
     
-    return MultiViewDataset(processed_views, labels)
+    metadata = {'dataset': 'mfeat', 'is_mock': mode == 'mock'}
+    if mode == 'real':
+        metadata.update(source_metadata([Path(data_dir) / f'mfeat-{name}' for name in view_dims]))
+    return MultiViewDataset(processed_views, labels, metadata=metadata)
+
+
+def source_metadata(paths):
+    hashes = {}
+    for path in paths:
+        path = Path(path)
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        hashes[path.name] = digest.hexdigest()
+    return {'is_mock': False, 'source_sha256': hashes}
+
+
+def get_dataset(dataset_name, data_dir=None, **kwargs):
+    """
+    Unified dataset factory function.
+    Routes to the appropriate loader based on dataset_name.
+    """
+    dataset_name_lower = dataset_name.lower()
+    
+    if "mfeat" in dataset_name_lower:
+        dir_path = data_dir if data_dir else Path(__file__).resolve().parents[2] / 'data/raw'
+        return load_mfeat_data(data_dir=dir_path, **kwargs)
+    
+    elif "caltech" in dataset_name_lower:
+        from src.utils.data_caltech import load_caltech_data
+        dir_path = data_dir if data_dir else Path(__file__).resolve().parents[2] / 'data/caltech'
+        return load_caltech_data(data_dir=dir_path, **kwargs)
+    
+    elif "100leaves" in dataset_name_lower:
+        from src.utils.data_100leaves import load_100leaves_data
+        dir_path = data_dir if data_dir else Path(__file__).resolve().parents[2] / 'data/100leaves'
+        return load_100leaves_data(data_dir=dir_path, **kwargs)
+    
+    elif "aloi" in dataset_name_lower:
+        from src.utils.data_aloi import load_aloi_data
+        dir_path = data_dir if data_dir else Path(__file__).resolve().parents[2] / 'data/aloi'
+        return load_aloi_data(data_dir=dir_path, **kwargs)
+    
+    else:
+        raise ValueError(f"Unknown dataset name: {dataset_name}")

@@ -1,0 +1,14 @@
+{
+  "evaluation_scope": "Transductive clustering on the training dataset; no held-out generalization claim.",
+  "latent_source": "Encoder posterior mean for encoder modes; optimized posterior mean for direct.",
+  "nmi": "KMeans normalized mutual information, arithmetic averaging.",
+  "acc": "KMeans clustering accuracy after optimal Hungarian label matching.",
+  "alignment_shift_mean": "Mean L2 distance between optimized Z and encoder Z; semi modes only.",
+  "robustness_shift_mean": "Mean L2 shift when each view is omitted in turn, averaged over views and samples.",
+  "robustness_relative_shift": "robustness_shift_mean / mean norm of full-view encoder Z.",
+  "masked_acc_mean": "Mean clustering accuracy across leave-one-view-out encoder inputs.",
+  "masked_nmi_mean": "Mean NMI across leave-one-view-out encoder inputs.",
+  "avg_recon_error": "Mean per-view MSE at posterior means; only for trained reconstruction readouts.",
+  "unavailable_values": "NaN / blank CSV cells; never substituted with zero.",
+  "uncertainty": "Sample standard deviation across training seeds, not a confidence interval."
+}

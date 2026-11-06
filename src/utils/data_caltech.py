@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from torch.utils.data import Dataset
 import urllib.request
-from src.utils.data_utils import MultiViewDataset
+from src.utils.data_utils import MultiViewDataset, source_metadata
 
 def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
     """
@@ -64,31 +64,10 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
                     os.remove(file_path) # Cleanup partial/corrupt file
         
         if not success:
-            print(f"❌ All automatic downloads failed.")
-            print(f"⚠️ Generating MOCK Caltech101-7 data to allow experiments to proceed.")
-            print(f"⚠️ RESULTS WILL BE MEANINGLESS. REPLACE 'Caltech101-7.mat' WITH REAL DATA LATER.")
-            
-            # Generate Mock Data
-            num_samples = 1474
-            num_classes = 7
-            
-            # Create dummy views matching standard Caltechdims
-            # raw_X structure: array of objects
-            # To emulate scipy.io.loadmat behavior for object arrays is tricky without saving
-            # So we will save a dummy MAT file
-            
-            mock_X = np.zeros((1, 6), dtype=object)
-            mock_X[0, 0] = np.random.randn(num_samples, 48)   # Gabor
-            mock_X[0, 1] = np.random.randn(num_samples, 40)   # WM
-            mock_X[0, 2] = np.random.randn(num_samples, 254)  # CENTRIST
-            mock_X[0, 3] = np.random.randn(num_samples, 1984) # HOG
-            mock_X[0, 4] = np.random.randn(num_samples, 512)  # GIST
-            mock_X[0, 5] = np.random.randn(num_samples, 928)  # LBP
-            
-            mock_Y = np.random.randint(1, num_classes + 1, (num_samples, 1))
-            
-            scipy.io.savemat(file_path, {'X': mock_X, 'Y': mock_Y})
-            print(f"✅ Created Mock Data at {file_path}")
+            raise FileNotFoundError(
+                f"All Caltech101-7 downloads failed. Place real data at {file_path}. "
+                "Synthetic data is never generated as a fallback."
+            )
 
     # Load .mat file
     try:
@@ -154,4 +133,4 @@ def load_caltech_data(data_dir="./data/caltech", reduce_dim=True):
         data = scaler.fit_transform(data)
         processed_views[name] = torch.tensor(data, dtype=torch.float32)
 
-    return MultiViewDataset(processed_views, labels)
+    return MultiViewDataset(processed_views, labels, metadata=source_metadata([file_path]))
