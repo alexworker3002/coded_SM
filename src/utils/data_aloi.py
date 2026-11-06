@@ -2,9 +2,10 @@ import os
 import tarfile
 import torch
 import numpy as np
+import hashlib
+import json
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import transforms
 from src.utils.data_utils import MultiViewDataset
 
 def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000, reduce_objects=None):
@@ -58,20 +59,18 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
         }
     elif mode == "rotation":
         # Pass validation here, specific logic is handled later in the function
-        view_configs = {} # Placeholder, not used for rotation mode
+        view_configs = {'view_left': None, 'view_center': None, 'view_right': None}
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
     # Image preprocessing
-    transform = transforms.Compose([
-        transforms.ToTensor(),  # Converts to (C, H, W) and scales to [0, 1]
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])  # Normalize to [-1, 1]
-    ])
+    def transform(img):
+        return torch.from_numpy(np.array(img, dtype=np.float32)).permute(2, 0, 1) / 127.5 - 1
     
     # Determine object IDs to load
     if reduce_objects:
         object_ids = np.random.choice(range(1, num_objects + 1), size=reduce_objects, replace=False)
-        object_ids = sorted(object_ids)
+        object_ids = sorted(int(value) for value in object_ids)
     else:
         object_ids = list(range(1, num_objects + 1))
     
@@ -79,18 +78,20 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
     print(f"[ALOI] Loading {num_samples} objects in '{mode}' mode...")
     
     # 1. Define cache path
-    cache_name = f"cache_{mode}_{num_samples}.pt"
+    selection = hashlib.sha256(json.dumps(object_ids).encode()).hexdigest()[:16]
+    cache_name = f"cache_v2_{mode}_{selection}.pt"
     cache_path = os.path.join(data_dir, cache_name)
+    metadata = {'dataset': 'aloi', 'is_mock': False, 'mode': mode, 'object_ids': object_ids}
     
     # 2. Try loading from cache
     if os.path.exists(cache_path):
         print(f"[ALOI] Found cache at {cache_path}. Loading...")
         try:
-            cache_data = torch.load(cache_path)
+            cache_data = torch.load(cache_path, weights_only=True)
             # Verify cache contains all views
-            if all(v in cache_data['views'] for v in (view_configs.keys() if mode in ["illumination", "color"] else tar_paths.keys())):
+            if cache_data['metadata'] == metadata and all(v in cache_data['views'] for v in (view_configs.keys() if mode in ["illumination", "color", "rotation"] else tar_paths.keys())):
                 print(f"[ALOI] Cache loaded successfully. {num_samples} samples.")
-                return MultiViewDataset(cache_data['views'], cache_data['labels'])
+                return MultiViewDataset(cache_data['views'], cache_data['labels'], metadata=metadata)
         except Exception as e:
             print(f"⚠️  Cache load failed: {e}. Re-loading from scratch.")
 
@@ -118,7 +119,7 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                         img = Image.open(img_path).convert('RGB')
                         images.append(transform(img))
                     except FileNotFoundError:
-                        images.append(torch.zeros(3, 144, 192))
+                        raise FileNotFoundError(f'Missing ALOI image: {img_path}')
             else:
                 # Slow path: TAR
                 with tarfile.open(tar_path, 'r') as tar:
@@ -130,7 +131,7 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                             img = Image.open(f).convert('RGB')
                             images.append(transform(img))
                         except KeyError:
-                            images.append(torch.zeros(3, 144, 192))
+                            raise FileNotFoundError(f'Missing ALOI image in archive: {filename}')
             
             processed_views[view_name] = torch.stack(images)  # (N, 3, 144, 192)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
@@ -146,7 +147,7 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                         img = Image.open(img_path).convert('RGB')
                         images.append(transform(img))
                     except FileNotFoundError:
-                        images.append(torch.zeros(3, 144, 192))
+                        raise FileNotFoundError(f'Missing ALOI image: {img_path}')
             else:
                 with tarfile.open(tar_path, 'r') as tar:
                     for obj_id in tqdm(object_ids, desc=f"Loading {view_name}"):
@@ -157,7 +158,7 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                             img = Image.open(f).convert('RGB')
                             images.append(transform(img))
                         except KeyError:
-                            images.append(torch.zeros(3, 144, 192))
+                            raise FileNotFoundError(f'Missing ALOI image in archive: {filename}')
             
             processed_views[view_name] = torch.stack(images)
             print(f"  ✓ {view_name}: {processed_views[view_name].shape}")
@@ -202,11 +203,9 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
                             all_view_data[view_names[i]].append(transform(img))
                         except FileNotFoundError:
                             # Try alternate naming if needed, or zero pad
-                            print(f"Warning: Missing {img_path}")
-                            all_view_data[view_names[i]].append(torch.zeros(3, 144, 192))
+                            raise FileNotFoundError(f'Missing ALOI rotation image: {img_path}')
         else:
-             print("Error: Rotation mode currently requires extracted raw data for speed.")
-             return None
+             raise FileNotFoundError(f'Rotation mode requires extracted images at {raw_root}')
 
         # Stack tensors
         for v in view_names:
@@ -219,16 +218,16 @@ def load_aloi_data(data_dir="./data/aloi", mode="illumination", num_objects=1000
         final_labels = torch.tensor(expanded_labels, dtype=torch.long)
         
         print(f"[ALOI] Saving processed data to cache: {cache_path}...")
-        torch.save({'views': processed_views, 'labels': final_labels}, cache_path)
+        torch.save({'views': processed_views, 'labels': final_labels, 'metadata': metadata}, cache_path)
         
         print(f"[ALOI] Loading complete: {len(final_labels)} samples (4x objects), {len(processed_views)} views.")
-        return MultiViewDataset(processed_views, final_labels)
+        return MultiViewDataset(processed_views, final_labels, metadata=metadata)
 
     # 4. Finalize and Cache
     labels = torch.tensor(object_ids, dtype=torch.long) - 1  # 0-indexed labels
     
     print(f"[ALOI] Saving processed data to cache: {cache_path}...")
-    torch.save({'views': processed_views, 'labels': labels}, cache_path)
+    torch.save({'views': processed_views, 'labels': labels, 'metadata': metadata}, cache_path)
     
     print(f"[ALOI] Loading complete: {num_samples} objects, {len(processed_views)} views.")
-    return MultiViewDataset(processed_views, labels)
+    return MultiViewDataset(processed_views, labels, metadata=metadata)

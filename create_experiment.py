@@ -3,6 +3,10 @@ import os
 import argparse
 import yaml
 import stat
+import copy
+import shlex
+import sys
+from pathlib import Path
 from datetime import datetime
 
 # Base Config Template
@@ -47,7 +51,7 @@ DATASET_DIMS = {
         "shape": 64, "texture": 64, "margin": 64
     },
     'caltech101-7': {
-        "WM": 40, "CENTRIST": 254, "LBP": 1180, "GIST": 512, "HOG": 198, "SIFT": 1000, "SS-LBP": 12
+        "gabor": 48, "wm": 40, "centrist": 100, "hog": 100, "gist": 100, "lbp": 100
     },
     'mfeat': {
         "fou": 76, "fac": 216, "kar": 64, "pix": 240, "zer": 47, "mor": 6
@@ -67,10 +71,12 @@ def create_experiment(args):
     print(f"[Create] Experiment Directory: {exp_dir}")
     
     # 2. Build Config
-    cfg = BASE_CONFIG.copy()
+    cfg = copy.deepcopy(BASE_CONFIG)
     cfg['experiment']['name'] = args.name
     cfg['experiment']['dataset'] = args.dataset
     cfg['experiment']['seed'] = args.seed
+    cfg['experiment']['device'] = args.device
+    cfg['experiment']['deterministic'] = True
     
     cfg['latent_space']['info_dim'] = args.z_dim
     cfg['latent_space']['redundancy_factor'] = args.redundancy
@@ -83,6 +89,14 @@ def create_experiment(args):
     cfg['training']['batch_size'] = args.batch_size
     cfg['training']['lr'] = args.lr
     cfg['training']['use_gp_loss'] = args.gp_loss
+    cfg['kernels']['rff_samples'] = args.rff_samples
+    cfg['kernels']['num_mixtures'] = args.num_mixtures
+    if args.inference.startswith('coded_') and args.ecc_type == 'none':
+        raise ValueError('Coded inference requires --ecc_type repetition or random_gaussian')
+    if args.ecc_type == 'none' and args.redundancy != 1:
+        raise ValueError('--ecc_type none requires --redundancy 1')
+    if args.dataset == 'aloi':
+        cfg['dataset_kwargs'] = {'mode': args.aloi_mode}
     
     # Adjust View Dims based on dataset
     if args.dataset in DATASET_DIMS:
@@ -100,13 +114,13 @@ def create_experiment(args):
     # 3. Create run.sh
     run_script_path = os.path.join(exp_dir, "run.sh")
     with open(run_script_path, 'w') as f:
-        f.write("#!/bin/bash\n\n")
-        f.write("# Environment Setup\n")
+        f.write("#!/bin/bash\nset -euo pipefail\n\n")
         f.write("export OMP_NUM_THREADS=1\n")
-        f.write("export KMP_DUPLICATE_LIB_OK=TRUE\n")
-        f.write("export PYTHONPATH=$PYTHONPATH:$(pwd)\n\n")
-        f.write("echo \"[Run] Starting Experiment: " + args.name + "\"\n")
-        f.write(f"python src/trainer/engine.py --config {os.path.abspath(config_path)} --experiment_dir {os.path.abspath(exp_dir)}\n")
+        root = Path(__file__).resolve().parent
+        f.write(f"cd {shlex.quote(str(root))}\n")
+        command = [sys.executable, '-m', 'src.trainer.engine', '--config',
+                   os.path.abspath(config_path), '--experiment_dir', os.path.abspath(exp_dir)]
+        f.write('exec ' + shlex.join(command) + '\n')
     
     # Make executable
     st = os.stat(run_script_path)
@@ -136,7 +150,9 @@ if __name__ == "__main__":
     parser.add_argument("--description", type=str, default="No description provided.", help="Experiment description")
     
     # Config Params
-    parser.add_argument("--dataset", type=str, default="100leaves", choices=['100leaves', 'caltech101-7', 'mfeat'])
+    parser.add_argument("--dataset", type=str, default="100leaves", choices=['100leaves', 'caltech101-7', 'mfeat', 'aloi'])
+    parser.add_argument('--device', default='auto')
+    parser.add_argument('--aloi-mode', choices=['rotation', 'illumination', 'color', 'mixed'], default='rotation')
     parser.add_argument("--z_dim", type=int, default=32)
     parser.add_argument("--redundancy", type=int, default=1, help="ECC Redundancy Factor L")
     parser.add_argument("--ecc_type", type=str, default="none", choices=['none', 'repetition', 'random_gaussian'])
@@ -144,7 +160,9 @@ if __name__ == "__main__":
     parser.add_argument("--inference", type=str, default="semi_amortized", 
                        choices=['direct', 'amortized', 'semi_amortized', 'coded_amortized', 'coded_semi_amortized'],
                        help="Inference mode")
-    parser.add_argument("--encoder", type=str, default="mlp", choices=['mlp', 'cnn'])
+    parser.add_argument("--encoder", type=str, default="mlp", choices=['mlp', 'cnn', 'cnn2d'])
+    parser.add_argument('--rff_samples', '--rff-samples', type=int, default=1000)
+    parser.add_argument('--num_mixtures', '--num-mixtures', type=int, default=4)
     
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=128)

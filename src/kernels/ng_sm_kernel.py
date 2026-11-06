@@ -14,11 +14,14 @@ class NextGenSpectralMixtureKernel(nn.Module):
     2. Dynamic RFF Sampling (resampled every forward pass).
     3. Specific Feature Construction (Sum of Cosines/Sines).
     """
-    def __init__(self, num_dims, num_mixtures=4, rff_samples=100):
+    def __init__(self, num_dims, num_mixtures=4, rff_samples=100, resample_rff=True):
         super().__init__()
         self.num_dims = num_dims # D (Input dim, e.g. x_dim)
         self.num_mixtures = num_mixtures # M
         self.rff_samples = rff_samples # S
+        self.resample_rff = resample_rff
+        self.register_buffer('eval_eps1', torch.randn(num_mixtures, rff_samples, num_dims))
+        self.register_buffer('eval_eps2', torch.randn(num_mixtures, rff_samples, num_dims))
         
         # In reference, feature dim is M * (2 * S) 
         self._feature_dim = self.num_mixtures * 2 * self.rff_samples
@@ -46,6 +49,11 @@ class NextGenSpectralMixtureKernel(nn.Module):
         return self._feature_dim
 
     def get_rff_feature(self, x):
+        # Keep spectral projections and their GP gradients outside reduced precision.
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            return self._get_rff_feature_fp32(x.float())
+
+    def _get_rff_feature_fp32(self, x):
         """
         Compute RFF features for input x.
         x: (N, D)
@@ -66,18 +74,20 @@ class NextGenSpectralMixtureKernel(nn.Module):
 
         # 2. Sample Frequencies (All mixtures at once)
         # eps: (M, S, D)
-        eps1 = torch.randn(M, S, D, device=device)
-        eps2 = torch.randn(M, S, D, device=device)
+        if self.training and self.resample_rff:
+            eps1 = torch.randn(M, S, D, device=device)
+            eps2 = torch.randn(M, S, D, device=device)
+        else:
+            eps1, eps2 = self.eval_eps1, self.eval_eps2
 
         # omega1: (M, S, D)
         omega1 = mu1 + std1 * eps1
         
         # omega2 (Conditional Bivariate Gaussian)
-        # Using reference logic (std1 in noise term)
         # Clamp rho to prevent sqrt(negative) when computing std of conditional
         rho_safe = rho.clamp(min=-0.99, max=0.99)
         term_mean = mu2 + rho_safe * (std2 / std1) * (omega1 - mu1)
-        term_noise = (1 - rho_safe**2).sqrt() * std1 * eps2
+        term_noise = (1 - rho_safe**2).sqrt() * std2 * eps2
         omega2 = term_mean + term_noise
 
         # 3. Compute inner products

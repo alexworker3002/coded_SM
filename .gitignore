@@ -3,9 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data
-# Note: 100Leaves dataset is now tracked
-data/processed/
+# New data files are ignored; datasets already tracked remain versioned.
+data/
 results/
 references/
 
@@ -27,6 +26,8 @@ experiments/
 # Environment
 env/
 venv/
+.venv/
+.pytest_cache/
 
 .agent/
 docs/

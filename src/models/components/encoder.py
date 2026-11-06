@@ -185,6 +185,11 @@ class MultiViewEncoder(nn.Module):
         # mu_T_joint = 0 + sum(mu_v * T_v)
         
         # Get batch size from first available view
+        if not views_dict:
+            raise ValueError("At least one observed view is required")
+        unknown = set(views_dict) - set(self.view_dims)
+        if unknown:
+            raise ValueError(f"Unknown views: {sorted(unknown)}")
         first_view = next(iter(views_dict.values()))
         batch_size = first_view.size(0)
         device = first_view.device

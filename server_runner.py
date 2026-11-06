@@ -5,11 +5,22 @@ import glob
 import time
 import subprocess
 import sys
-import multiprocessing
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
 
 PYTHON_EXEC = sys.executable 
+
+
+def visible_gpu_id(gpu_id):
+    """Map a visible GPU ordinal to the identifier inherited by child processes."""
+    visible = os.environ.get('CUDA_VISIBLE_DEVICES')
+    if visible is None:
+        return str(gpu_id)
+    devices = [item.strip() for item in visible.split(',') if item.strip()]
+    if gpu_id >= len(devices):
+        raise ValueError(f'GPU ordinal {gpu_id} is outside CUDA_VISIBLE_DEVICES')
+    return devices[gpu_id]
 
 def get_gpu_count():
     try:
@@ -57,7 +68,7 @@ def run_experiment(cfg_path, gpu_id, checkpoint_dir, log_dir):
     
     env = os.environ.copy()
     if gpu_id is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        env["CUDA_VISIBLE_DEVICES"] = visible_gpu_id(gpu_id)
     
     cmd = [PYTHON_EXEC, "-m", "src.trainer.engine", "--config", cfg_path]
     
@@ -93,6 +104,14 @@ def run_experiment(cfg_path, gpu_id, checkpoint_dir, log_dir):
         print(f"[Runner] ❌ FAILED: {basename}")
         return False
 
+
+def run_with_slot(cfg_path, slots, checkpoint_dir, log_dir):
+    gpu_id = slots.get()
+    try:
+        return run_experiment(cfg_path, gpu_id, checkpoint_dir, log_dir)
+    finally:
+        slots.put(gpu_id)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_dir", type=str, default="configs/caltech_batch", help="Directory containing config yamls")
@@ -105,8 +124,9 @@ def main():
 
 
     if not os.path.exists(args.config_dir):
-        print(f"Config dir {args.config_dir} not found.")
-        return
+        raise SystemExit(f"Config dir {args.config_dir} not found.")
+    if args.max_workers is not None and args.max_workers < 1:
+        parser.error('--max_workers must be positive')
 
     import datetime
     import shutil
@@ -158,26 +178,41 @@ def main():
     batches_count = (num_pending + max_workers - 1) // max_workers
     print(f"Detected {num_gpus} GPUs. Running {num_pending} tasks with {max_workers} workers ({batches_count} batches).\n")
 
+    failures = []
     if max_workers <= 1:
         for i, cfg in enumerate(pending):
             print(f"--- Progress: {i+1}/{num_pending} ---")
-            run_experiment(cfg, 0 if num_gpus > 0 else None, batch_checkpoint_dir, batch_log_dir)
+            if not run_experiment(cfg, 0 if num_gpus > 0 else None, batch_checkpoint_dir, batch_log_dir):
+                failures.append(cfg)
     else:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Keep a GPU slot occupied until its subprocess exits. Users can explicitly
+        # request more workers than devices to allow controlled oversubscription.
+        slots = Queue()
+        for i in range(max_workers):
+            slots.put(i % num_gpus if num_gpus else None)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_cfg = {}
-            for i, cfg in enumerate(pending):
-                gpu_id = i % num_gpus if num_gpus > 0 else None
-                future = executor.submit(run_experiment, cfg, gpu_id, batch_checkpoint_dir, batch_log_dir)
+            for cfg in pending:
+                future = executor.submit(run_with_slot, cfg, slots, batch_checkpoint_dir, batch_log_dir)
                 future_to_cfg[future] = cfg
             
             completed = 0
             for future in as_completed(future_to_cfg):
                 completed += 1
                 cfg = future_to_cfg[future]
+                try:
+                    if not future.result():
+                        failures.append(cfg)
+                except Exception as error:
+                    print(f'[Runner] FAILED {cfg}: {error}')
+                    failures.append(cfg)
                 print(f"[Runner] Global Progress: {completed}/{num_pending}")
 
 
-    print("\nAll experiments finished.")
+    if failures:
+        print(f'\n{len(failures)} experiments failed: {failures}')
+        raise SystemExit(1)
+    print("\nAll experiments finished successfully.")
     
     # Auto-analysis if requested
     if args.auto_analyze:
@@ -200,6 +235,7 @@ def main():
             print(f"\n✅ Analysis complete. Results in: {result_folder}")
         except subprocess.CalledProcessError:
             print(f"\n❌ Analysis failed. Check logs.")
+            raise SystemExit(1)
 
 if __name__ == "__main__":
     main()

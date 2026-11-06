@@ -48,6 +48,8 @@ class CNG_MV_GPLVM(nn.Module):
         self.ecc_mode = ecc_mode
         self.encoder_type = encoder_type
         self.view_shapes = view_shapes or {}
+        if inference_mode.startswith('coded_') and not use_ecc:
+            raise ValueError("Coded inference requires use_ecc=True and a valid ECC mode")
         
         # =========================================================
         # 1. Variational Inference Strategy
@@ -72,14 +74,11 @@ class CNG_MV_GPLVM(nn.Module):
         elif self.inference_mode == 'coded_amortized':
             print(f"[Model] Using CODED-Amortized Inference (Encoder -> X -> Decoder -> Z)")
             from src.models.components.encoder import MultiViewEncoder
-            from src.modules.ecc_decoder import LinearECCDecoder
             
             # Encoder predicts High-Dim X (L * Z)
             self.x_dim_coded = input_dim * redundancy_factor
             self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
             
-            # Decoder projects X -> Z
-            self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
             
         elif self.inference_mode == 'coded_semi_amortized':
             print(f"[Model] Using CODED-SEMI-Amortized Inference")
@@ -91,13 +90,10 @@ class CNG_MV_GPLVM(nn.Module):
             
             # 2. Coded Encoder Components
             from src.models.components.encoder import MultiViewEncoder
-            from src.modules.ecc_decoder import LinearECCDecoder
             
             # Encoder predicts High-Dim X
             self.x_dim_coded = input_dim * redundancy_factor
             self.encoder = MultiViewEncoder(view_dims, self.x_dim_coded, arch_type=encoder_type, view_shapes=self.view_shapes)
-            # Decoder projects X -> Z
-            self.ecc_decoder = LinearECCDecoder(input_dim, redundancy_factor, mode=ecc_mode, matrix_path=ecc_matrix_path)
 
         else:
             raise ValueError(f"Unknown inference mode: {inference_mode}")
@@ -119,6 +115,10 @@ class CNG_MV_GPLVM(nn.Module):
             self.ecc_module = nn.Identity()
             print(f"[Model] Initialized WITHOUT ECC (Baseline Mode). Z({input_dim}) -> X({self.x_dim})")
 
+        if self.inference_mode.startswith('coded_'):
+            from src.modules.ecc_decoder import LinearECCDecoder
+            self.ecc_decoder = LinearECCDecoder(self.ecc_module.G)
+
         # =========================================================
         # 3. Multi-View Components (Kernels + Readouts)
         # =========================================================
@@ -135,7 +135,8 @@ class CNG_MV_GPLVM(nn.Module):
             self.kernels[name] = NextGenSpectralMixtureKernel(
                 num_dims=self.x_dim,
                 num_mixtures=num_mixtures, 
-                rff_samples=rff_samples
+                rff_samples=rff_samples,
+                resample_rff=not use_readouts
             )
             # Readout (Optional: save memory for high-dim images)
             if use_readouts:
@@ -154,6 +155,15 @@ class CNG_MV_GPLVM(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
+    def infer_latents(self, views_batch):
+        """Infer from the available views, decoding coded modes into Z coordinates."""
+        if self.inference_mode == 'direct':
+            raise ValueError("Direct inference has no encoder for new or missing-view inputs")
+        mu, log_sigma = self.encoder(views_batch)
+        if self.inference_mode.startswith('coded_'):
+            mu, log_sigma = self.ecc_decoder(mu, log_sigma)
+        return mu, log_sigma
+
     def get_latents(self, batch_indices=None, views_batch=None):
         """
         根据推断模式获取 q(z) 参数
@@ -168,14 +178,14 @@ class CNG_MV_GPLVM(nn.Module):
         elif self.inference_mode == 'amortized':
             if views_batch is None:
                 raise ValueError("In amortized mode, views_batch must be provided to forward()")
-            return self.encoder(views_batch)
+            return self.infer_latents(views_batch)
             
         elif self.inference_mode == 'semi_amortized':
             # Direct Part
             if batch_indices is None:
-                mu_opt, log_var_opt = self.q_mu, self.q_log_sigma
+                mu_opt, log_sigma_opt = self.q_mu, self.q_log_sigma
             else:
-                mu_opt, log_var_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+                mu_opt, log_sigma_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
             
             # Encoder Part
             if views_batch is None:
@@ -183,37 +193,31 @@ class CNG_MV_GPLVM(nn.Module):
                 # But typically we provide batch.
                 mu_enc, log_sigma_enc = None, None
             else:
-                mu_enc, log_sigma_enc = self.encoder(views_batch)
+                mu_enc, log_sigma_enc = self.infer_latents(views_batch)
                 
-            return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
+            return (mu_opt, log_sigma_opt), (mu_enc, log_sigma_enc)
             
         elif self.inference_mode == 'coded_amortized':
             if views_batch is None:
                 raise ValueError("Coded Amortized mode requires views_batch")
             
             # 1. Prediction: Y -> q(X)
-            mu_x, logvar_x = self.encoder(views_batch)
-            
-            # 2. Decoding: q(X) -> q(Z)
-            mu_z, logvar_z = self.ecc_decoder(mu_x, logvar_x)
-            
-            return mu_z, logvar_z
+            return self.infer_latents(views_batch)
             
         elif self.inference_mode == 'coded_semi_amortized':
             # 1. Direct Part (Z_opt)
             if batch_indices is None:
-                mu_opt, log_var_opt = self.q_mu, self.q_log_sigma
+                mu_opt, log_sigma_opt = self.q_mu, self.q_log_sigma
             else:
-                mu_opt, log_var_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
+                mu_opt, log_sigma_opt = self.q_mu[batch_indices], self.q_log_sigma[batch_indices]
 
             # 2. Coded Encoder Part (Y -> X -> Z_enc)
             if views_batch is None:
                 mu_enc, log_sigma_enc = None, None
             else:
-                mu_x, logvar_x = self.encoder(views_batch)
-                mu_enc, log_sigma_enc = self.ecc_decoder(mu_x, logvar_x)
+                mu_enc, log_sigma_enc = self.infer_latents(views_batch)
                 
-            return (mu_opt, log_var_opt), (mu_enc, log_sigma_enc)
+            return (mu_opt, log_sigma_opt), (mu_enc, log_sigma_enc)
 
     def forward(self, batch_indices=None, views_batch=None, compute_reconstructions=True):
         """
@@ -225,13 +229,13 @@ class CNG_MV_GPLVM(nn.Module):
         if self.inference_mode in ['semi_amortized', 'coded_semi_amortized']:
             (mu_opt, log_sigma_opt), (mu_enc, _) = latents
             # For reconstruction, we use Z_opt (Direct Optimization)
-            z_sample = self.reparameterize(mu_opt, log_sigma_opt)
+            z_sample = self.reparameterize(mu_opt, log_sigma_opt) if self.training else mu_opt
             # We return mu_enc for Alignment Loss calculation in engine
             batch_mu = mu_opt
             batch_log_sigma = log_sigma_opt
         else:
             batch_mu, batch_log_sigma = latents
-            z_sample = self.reparameterize(batch_mu, batch_log_sigma)
+            z_sample = self.reparameterize(batch_mu, batch_log_sigma) if self.training else batch_mu
             mu_enc = None # Placeholder
         
         # 2. ECC 编码: Z -> X
@@ -284,19 +288,14 @@ class CNG_MV_GPLVM(nn.Module):
             
             N, D = Phi.shape
             Dy = y_true.shape[1]
-            noise_var = noise_sigma.pow(2).clamp(min=1e-6)
-            jitter = 1e-5
+            # The same effective variance must be used in both algebraic branches.
+            noise_var = noise_sigma.pow(2).clamp(min=1e-6) + 1e-5
             
             if N > D:
                 # Woodbury Identity Case (Scalable)
                 # A = Phi^T Phi + sigma^2 I
-                A = Phi.t() @ Phi + (noise_var + jitter) * torch.eye(D, device=Phi.device)
-                try:
-                    L = torch.linalg.cholesky(A)
-                except RuntimeError:
-                    # Fallback: larger jitter
-                    A = A + 1e-4 * torch.eye(D, device=Phi.device)
-                    L = torch.linalg.cholesky(A)
+                A = Phi.t() @ Phi + noise_var * torch.eye(D, device=Phi.device)
+                L = torch.linalg.cholesky(A)
                 
                 # Lt_inv_Phi_y = L^{-1} * (Phi^T * Y)
                 Phi_T_Y = Phi.t() @ y_true
@@ -315,7 +314,7 @@ class CNG_MV_GPLVM(nn.Module):
                 nll = 0.5 * (quad_term + log_det_K * Dy + N * Dy * np.log(2 * np.pi))
             else:
                 # Direct Case (N <= D)
-                K = Phi @ Phi.t() + (noise_var + jitter) * torch.eye(N, device=Phi.device)
+                K = Phi @ Phi.t() + noise_var * torch.eye(N, device=Phi.device)
                 L = torch.linalg.cholesky(K)
                 L_inv_Y = torch.linalg.solve_triangular(L, y_true, upper=False)
                 
@@ -325,7 +324,8 @@ class CNG_MV_GPLVM(nn.Module):
                 
             return nll
 
-    def compute_loss(self, views_batch, batch_indices, beta=1.0, use_gp_loss=True):
+    def compute_loss(self, views_batch, batch_indices, beta=1.0, use_gp_loss=True,
+                     alignment_beta=0.1):
         """
         views_batch: dict {view_name: tensor}
         use_gp_loss: 是否使用 Yang (2025) 的 GP 边际似然损失
@@ -354,6 +354,9 @@ class CNG_MV_GPLVM(nn.Module):
             else:
                 # 标准 VAE 逻辑: Gaussian Reconstruction NLL
                 y_pred = y_recons[name]
+                if y_pred is None:
+                    raise ValueError("Reconstruction loss requires use_readouts=True")
+                y_true = y_true.reshape(y_true.size(0), -1)
                 mse = (y_true - y_pred).pow(2)
                 nll = torch.log(noise_sigma) + 0.5 * mse / (noise_sigma ** 2)
                 view_loss = nll.sum()
@@ -371,5 +374,9 @@ class CNG_MV_GPLVM(nn.Module):
         details["kl_scaled"] = kl_div_scaled.item()
         details["data_loss"] = total_data_loss.item() 
         
-        # Total loss = Data Loss + Scaled KL (beta is ignored when using Yang scaling)
-        return total_data_loss + kl_div_scaled, details
+        loss = total_data_loss + beta * kl_div_scaled
+        if mu_enc is not None:
+            align_loss = F.mse_loss(mu_enc, mu.detach(), reduction='sum')
+            loss = loss + alignment_beta * align_loss
+            details['align_loss'] = align_loss.item()
+        return loss, details

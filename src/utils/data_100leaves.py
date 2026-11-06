@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from torch.utils.data import Dataset
 import urllib.request
-from src.utils.data_utils import MultiViewDataset
+from src.utils.data_utils import MultiViewDataset, source_metadata
 
 def load_100leaves_data(data_dir="./data/100leaves", reduce_dim=False):
     """
@@ -54,21 +54,10 @@ def load_100leaves_data(data_dir="./data/100leaves", reduce_dim=False):
                      os.remove(file_path)
 
         if not success:
-            print(f"❌ All automatic downloads failed.")
-            print(f"⚠️ Generating MOCK 100Leaves data to allow experiments to proceed.")
-            
-            num_samples = 1600
-            num_classes = 100
-            
-            mock_X = np.zeros((1, 3), dtype=object)
-            mock_X[0, 0] = np.random.randn(num_samples, 64)   # Shape
-            mock_X[0, 1] = np.random.randn(num_samples, 64)   # Texture
-            mock_X[0, 2] = np.random.randn(num_samples, 64)   # Margin
-            
-            mock_Y = np.random.randint(1, num_classes + 1, (num_samples, 1))
-            
-            scipy.io.savemat(file_path, {'X': mock_X, 'Y': mock_Y})
-            print(f"✅ Created Mock Data at {file_path}")
+            raise FileNotFoundError(
+                f"All 100Leaves downloads failed. Place real data at {file_path}. "
+                "Synthetic data is never generated as a fallback."
+            )
 
     try:
         mat = scipy.io.loadmat(file_path)
@@ -113,4 +102,4 @@ def load_100leaves_data(data_dir="./data/100leaves", reduce_dim=False):
         data = scaler.fit_transform(data)
         processed_views[name] = torch.tensor(data, dtype=torch.float32)
         
-    return MultiViewDataset(processed_views, labels)
+    return MultiViewDataset(processed_views, labels, metadata=source_metadata([file_path]))

@@ -1,96 +1,49 @@
-# Coded-SM 模型架构与配置指南
+# 模型与概率接口约定
 
-本文档全面梳理 CNG-MV-GPLVM 框架支持的**推断模式**、**纠错编码 (ECC)** 及**组合策略**，帮助设计对比实验。
+五种模式统一由 `src/utils/experiment.py` 构建，训练与评估不得独立猜测模型参数。
 
----
+| 模式 | 编码器目标维度 | 训练中的生成潜变量 | 编码器训练目标 |
+|---|---|---|---|
+| direct | 无 | 逐样本 Z | 无 |
+| amortized | Z | 编码器 Z | 数据损失与 KL |
+| semi_amortized | Z | 逐样本 Z | 均值对齐到停止梯度的优化 Z |
+| coded_amortized | X=L×Z | 解码后的编码器 Z | 数据损失与 KL |
+| coded_semi_amortized | X=L×Z | 逐样本 Z | 解码后的均值对齐到停止梯度的优化 Z |
 
-## 1. 核心推断模式 (Inference Modes)
+## 编码与解码
 
-我们支持五种推断模式，分别对应不同的 $Y \to Z$ 路径和优化策略：
+`X=ZG` 中 G 的形状为 `(d_z, L*d_z)`，生成与解码必须使用同一个矩阵。
+重复投影按坐标重复，`G = I ⊗ ones(1,L)`；随机高斯矩阵元素标准差为 `1/sqrt(L*d_z)`。
+两者的范数缩放不同，实验中的性能差异不能自动归因于纠错能力。
 
-| 模式名称                 | 命令行参数                         | 流程描述                                                                   | 适用场景                            | 关键机制                                                 |
-| :----------------------- | :--------------------------------- | :------------------------------------------------------------------------- | :---------------------------------- | :------------------------------------------------------- |
-| **Direct Optimization**  | `--inference direct`               | $\mu, \sigma$ 是直接优化的参数，不通过编码器。                             | 小数据集 (N < 2000)，追求最高精度。 | **最纯净**: 无平摊误差。                                 |
-| **Amortized (VAE)**      | `--inference amortized`            | $Y \xrightarrow{Enc} Z$                                                    | 大数据集，需快速前向推断。          | **最快**: 仅优化 Encoder 权重。                          |
-| **Semi-Amortized**       | `--inference semi_amortized`       | 同时维护 Direct $Z_{opt}$ 和 Encoder $Z_{enc}$，通过 Alignment Loss 对齐。 | 既要高精度又要泛化能力。            | **双流**: 保持 Anchor 稳定，训练 Encoder 逼近。          |
-| **Coded-Amortized**      | `--inference coded_amortized`      | $Y \xrightarrow{Enc} X_{noisy} \xrightarrow{Dec} Z_{clean}$                | 这里的 $X$ 是 $L \cdot Z$ 维。      | **推断抗噪**: 利用 ECC 解码去除 Encoder 预测噪声。       |
-| **Coded-Semi-Amortized** | `--inference coded_semi_amortized` | $Y \xrightarrow{Enc} X \xrightarrow{Dec} Z_{enc} \leftrightarrow Z_{opt}$  | 高精度 + 抗噪推断的终极组合。       | **Coded Alignment**: 迫使 Encoder 学习可解码的高维结构。 |
+所有跨模块分布接口均为 `(mu, log_sigma)`，其中 `var=exp(2*log_sigma)`。
+设伪逆为 `G_pinv`：
 
----
-
-## 2. 模式拓扑图解
-
-### 2.1 Standard Semi-Amortized
-```mermaid
-graph LR
-    subgraph Direct
-    Z_opt[Z_opt (Param)]
-    end
-    subgraph Amortized
-    Y --> Enc[Encoder] --> Z_enc
-    end
-    Z_opt <-->|Alignment Loss| Z_enc
-    Z_opt -->|Reparam| Z_sample -->|ECC| X -->|Kernel| Y_recon
+```text
+mu_z = mu_x @ G_pinv
+var_z = exp(2*log_sigma_x) @ (G_pinv ** 2)
+log_sigma_z = 0.5 * log(var_z)
 ```
 
-### 2.2 Coded-Amortized
-```mermaid
-graph LR
-    Y --> Enc[Encoder] --> X_noisy[X (High Dim)]
-    X_noisy -->|ECC Decoder| Z_clean
-    Z_clean -->|Reparam| Z_sample -->|ECC| X_clean -->|Kernel| Y_recon
-```
-> **注意**: 这里的关键是推断路径 $Y \to X$。即使生成时我们也会再把 $Z$ 映射回 $X$ (use_ecc=True)，Coded-Amortized 的核心贡献在于利用冗余性来“清洗”推断结果。
+这只保留传播后协方差的对角线。重复码中独立单位方差的 L 个预测，其平均方差为 `1/L`。
+不能把 `logvar` 直接送进需要 `log_sigma` 的重参数化或 KL 计算。
 
----
+## 损失与随机性
 
-## 3. 纠错编码类型 (ECC Types)
+GP 目标通过 `K=Phi Phi^T + noise_var I` 计算边际 NLL。
+依据样本数和特征数选择直接 Cholesky 或 Woodbury 公式，两条路径使用一致的有效噪声方差。
+本实现保留 `KL/(N*50)` 的项目约定，两个 semi 模式使用相同的均值对齐机制。
 
-ECC 用于扩展潜在空间的维度结构，从 $Z \in \mathbb{R}^k$ 到 $X \in \mathbb{R}^{L \cdot k}$。
+GP 训练会重采样频率；评估频率作为 buffer 保存在 checkpoint 中。
+重构训练固定频率，以维持输出层的特征坐标。
+评估使用潜变量均值。固定种子控制 Python、NumPy、PyTorch、DataLoader 及确定性算法。
 
-| 类型                | 参数                         | 描述                | 数学原理                                                       |
-| :------------------ | :--------------------------- | :------------------ | :------------------------------------------------------------- |
-| **None**            | `--ecc_type none`            | 不使用 ECC，$L=1$。 | 标准 GPLVM/VAE 基线。                                          |
-| **Repetition**      | `--ecc_type repetition`      | 重复 $L$ 次         | $X = [Z, Z, ..., Z]$。<br>通过简单的平均机制降低方差。         |
-| **Random Gaussian** | `--ecc_type random_gaussian` | 随机投影矩阵 $G$    | $X = ZG$。<br>利用高维几何的集中现象 (RIP 性质) 保持距离结构。 |
+## 评估边界
 
----
+完整视图聚类、缺失视图聚类、编码器对齐、重构误差分别报告。
+direct 没有新样本编码器，因此缺失视图推断指标为 NaN。
+GP 模式不训练线性重构输出层，因此重构 MSE 为 NaN。
+完整/缺失视图的 KMeans 分别拟合，类别标签仅参与评价。
+这些指标来自训练样本，不能当成留出样本测试结果。
 
-## 4. 实验组合与对比策略
-
-您可以通过组合上述选项来构建不同的实验组。
-
-### 4.1 经典对比组：ECC 的有效性
-**目标**: 验证引入冗余是否能提升聚类性能。
-*   **Baseline**: `inference=semi_amortized`, `ecc=none`
-*   **Exp A**: `inference=semi_amortized`, `ecc=repetition`, `L=2`
-*   **Exp B**: `inference=semi_amortized`, `ecc=random_gaussian`, `L=2`
-
-### 4.2 进阶对比组：推断流向 (Inference Flow)
-**目标**: 验证 "先编码为 X 再解码" (`coded`) 是否比 "直接编码为 Z" (`semi`) 更鲁棒。
-*   **Model A (Standard)**: `inference=semi_amortized`, `ecc=repetition`, `L=2`
-*   **Model B (Coded)**: `inference=coded_semi_amortized`, `ecc=repetition`, `L=2`
-> **Hypothesis**: 如果数据包含大量观测噪声，Model B 的 Decoder 步骤应该能起到很好的去噪作用，使得 $Z_{enc}$ 更稳定。
-
----
-
-## 5. 推荐配置清单
-
-1.  **追求 SOTA (Best Accuracy)**:
-    ```bash
-    --inference semi_amortized --ecc_type repetition --redundancy 2 --z_dim 64
-    ```
-
-2.  **鲁棒性研究 (Robustness Research)**:
-    ```bash
-    --inference coded_semi_amortized --ecc_type random_gaussian --redundancy 5
-    ```
-    *注意：使用 coded_semi_amortized 时，建议开启梯度裁剪，因为涉及高维投影。*
-
-3.  **快速基线 (Fast Baseline)**:
-    ```bash
-    --inference amortized --ecc_type none --z_dim 32
-    ```
-
----
-*文档作者: Antigravity Agent*
+各推断模式是否优于其他模式、冗余投影是否提高抗噪性，必须通过相同预算下的多种子实验判断。

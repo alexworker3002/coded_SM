@@ -1,0 +1,66 @@
+{
+  "purpose": "Short transductive real-data validation; insufficient to establish ECC superiority.",
+  "base_commit": "a5fd0988fcd32be159ca4ba17a123ca2a8930d59",
+  "source_sha256": "074c5c44d0fdbf46a72aca6c3a612970e1da6ac2aa8925522426fb1be59de924",
+  "python": "3.13.13",
+  "torch_build": "2.12.1+cu130",
+  "device": "cpu",
+  "versions": {
+    "torch": "2.12.1",
+    "numpy": "2.5.0",
+    "scipy": "1.18.0",
+    "scikit-learn": "1.9.1",
+    "PyYAML": "6.0.3",
+    "pandas": "3.0.3",
+    "matplotlib": "3.11.0",
+    "tensorboard": "2.21.0",
+    "tqdm": "4.67.3",
+    "Pillow": "12.2.0",
+    "threadpoolctl": "3.8.0"
+  },
+  "data_fingerprint": "ccdc9c81477dfe684c8acb1d38cb72e4a6fbbffce2f78092700fb5ec939e8951",
+  "data_metadata": {
+    "dataset": "mfeat",
+    "is_mock": false,
+    "source_sha256": {
+      "mfeat-fac": "83be9bc9fd50c6dd0b0532f6b6101956f1cf51c71b33f22d3f0cd2b5befb31b5",
+      "mfeat-fou": "d2bed48a4d302efe77bd80d52e16a211e99efe6fee9baf1c28dcc199c43c50ad",
+      "mfeat-kar": "db832668544497d0c06a2c1d1bfa0e17ba672812b7cfa6ed19f0941e19e1d7fa",
+      "mfeat-pix": "70a1cd033add46614464a8740ddc23c3693765985bde52ccb6b702bff23b64f1",
+      "mfeat-zer": "d4a0e302f2f61e823b906f78818c7c0ef078c0bbc23022affd6607d60ecfe4f3",
+      "mfeat-mor": "8767b326d874f096de06d525a2df4e610f4e9dfe91e29c250d8a3054907e3b61"
+    }
+  },
+  "dataset": "mfeat",
+  "num_samples": 2000,
+  "view_dims": {
+    "fac": 216,
+    "fou": 76,
+    "kar": 64,
+    "pix": 240,
+    "zer": 47,
+    "mor": 6
+  },
+  "epochs": 20,
+  "training_seeds": [
+    42,
+    43,
+    44
+  ],
+  "evaluation_seed": 42,
+  "objective": "Full-data GP marginal likelihood plus KL/(N*50) and mean alignment.",
+  "same_seed_repeat": {
+    "all_model_tensors_identical": true,
+    "history_bytes_identical": true,
+    "metrics_identical": true,
+    "excluded_from_seed_summary": true
+  },
+  "num_control_runs": 15,
+  "num_total_trainings": 16,
+  "source_archive": {
+    "file": "source_snapshot.tar.gz",
+    "sha256": "fc6d700430885a479c7c74354887a39bb9f0c91acf6c48f3cc33e5abac3eb58f",
+    "files": 41
+  },
+  "repair_branch": "fix/coded-reproducibility"
+}
